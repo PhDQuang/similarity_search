@@ -144,3 +144,29 @@ For the full setup and GitHub workflow, see:
 ```text
 docs/DOCKER_AND_GITHUB_WORKFLOW.md
 ```
+
+## Share processed dataset with the team
+
+Do not commit processed datasets to GitHub. Publish processed subsets to
+Hugging Face Dataset Hub, then every team member can load the same data with
+`datasets.load_dataset()`.
+
+Example:
+
+```powershell
+python scripts/push_processed_dataset_to_hub.py --subset pair-class --repo-id <team-name>/allnli-pair-class-processed --private
+```
+
+Team members load it with:
+
+```python
+from datasets import load_dataset
+
+ds = load_dataset("<team-name>/allnli-pair-class-processed")
+```
+
+See:
+
+```text
+docs/DATASET_SHARING_AND_TRAINING.md
+```
