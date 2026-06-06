@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -e .
+
+      - name: Syntax check
+        run: |
+          python -B -c "from pathlib import Path; files=list(Path('src').rglob('*.py')); [compile(p.read_text(encoding='utf-8'), str(p), 'exec') for p in files]; print('syntax_ok', len(files), 'files')"
+
+      - name: CLI help checks
+        run: |
+          python -m similarity_search.data.prepare_allnli --help
+          python -m similarity_search.data.eda_allnli --help
+
+  docker-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build --build-arg REQUIREMENTS_FILE=requirements.txt -t similarity-search-nlp:ci .
+

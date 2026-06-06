@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: similarity-search-nlp
+Version: 0.1.0
+Summary: Semantic document similarity search project using AllNLI
+Requires-Python: >=3.10

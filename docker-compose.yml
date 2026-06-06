@@ -1,0 +1,45 @@
+services:
+  dev:
+    build:
+      context: .
+      args:
+        REQUIREMENTS_FILE: requirements.txt
+    image: similarity-search-nlp:dev
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      HF_HOME: /app/data/raw/hf_cache
+      PYTHONPATH: /app/src
+    command: python -m similarity_search.data.prepare_allnli --help
+
+  train:
+    build:
+      context: .
+      args:
+        REQUIREMENTS_FILE: requirements-train.txt
+    image: similarity-search-nlp:train
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      HF_HOME: /app/data/raw/hf_cache
+      PYTHONPATH: /app/src
+    command: python -m similarity_search.data.prepare_allnli --help
+
+  web:
+    build:
+      context: .
+      args:
+        REQUIREMENTS_FILE: requirements-app.txt
+    image: similarity-search-nlp:web
+    working_dir: /app
+    volumes:
+      - .:/app
+    ports:
+      - "8501:8501"
+    environment:
+      HF_HOME: /app/data/raw/hf_cache
+      PYTHONPATH: /app/src
+    command: streamlit run src/similarity_search/app/streamlit_app.py --server.port=8501 --server.address=0.0.0.0
+

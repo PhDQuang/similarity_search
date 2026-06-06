@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+src/similarity_search/__init__.py
+src/similarity_search/app/streamlit_app.py
+src/similarity_search/data/__init__.py
+src/similarity_search/data/eda_allnli.py
+src/similarity_search/data/prepare_allnli.py
+src/similarity_search/data/text_utils.py
+src/similarity_search_nlp.egg-info/PKG-INFO
+src/similarity_search_nlp.egg-info/SOURCES.txt
+src/similarity_search_nlp.egg-info/dependency_links.txt
+src/similarity_search_nlp.egg-info/top_level.txt
