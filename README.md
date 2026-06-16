@@ -196,6 +196,13 @@ For the full setup and GitHub workflow, see:
 docs/DOCKER_AND_GITHUB_WORKFLOW.md
 ```
 
+The web demo now includes semantic search, document comparison, Cross-Encoder
+NLI scoring, and Hybrid reranking. See:
+
+```text
+docs/WEB_DEMO.md
+```
+
 ## Share processed dataset with the team
 
 Do not commit processed datasets to GitHub. Publish processed subsets to
