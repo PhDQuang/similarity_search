@@ -100,6 +100,57 @@ outputs/figures/allnli/pair-class/
 outputs/reports/allnli/pair-class/
 ```
 
+## Run the TF-IDF baseline
+
+Fit TF-IDF on the training split, select the entailment similarity threshold
+on the development split, and report pair and retrieval metrics on the test
+split:
+
+```powershell
+python -m similarity_search.models.tfidf_baseline
+```
+
+Outputs are written to:
+
+```text
+outputs/tfidf_baseline/metrics.json
+outputs/tfidf_baseline/dev_predictions.csv
+outputs/tfidf_baseline/test_predictions.csv
+models/tfidf_baseline/vectorizer.joblib
+```
+
+## Run the pretrained MiniLM baseline
+
+Evaluate `sentence-transformers/all-MiniLM-L6-v2` without fine-tuning:
+
+```powershell
+python -m pip install -r requirements-train.txt
+python -m similarity_search.models.minilm_baseline --device cpu
+python scripts/compare_baselines.py
+```
+
+The MiniLM metrics and the shared comparison table are written to:
+
+```text
+outputs/minilm_baseline/metrics.json
+outputs/tables/model_comparison.csv
+```
+
+## Fine-tune MiniLM on Kaggle
+
+The repository includes a Kaggle-ready training CLI using AllNLI `pair` and
+`MultipleNegativesRankingLoss`:
+
+```bash
+python -m similarity_search.models.train_biencoder \
+  --output-dir /kaggle/working/allnli-minilm-biencoder \
+  --num-train-epochs 1 \
+  --batch-size 64
+```
+
+See `docs/KAGGLE_BIENCODER_TRAINING.md` for the full notebook workflow,
+evaluation commands, model download, and optional Hugging Face upload.
+
 ## Collaboration recommendation
 
 Use GitHub for source code, notebooks, report source, issues, and pull requests.
