@@ -61,6 +61,19 @@ python -m pip install -r requirements.txt
 python -m pip install -e .
 ```
 
+`pyproject.toml` requires Python >=3.10. If your interpreter is older (e.g.
+Python 3.9), `pip install -e .` fails with a version error. In that case skip
+the editable install and set `PYTHONPATH` instead before running any
+`python -m similarity_search...` command or the Streamlit app:
+
+```powershell
+$env:PYTHONPATH = "src"
+```
+
+```bash
+export PYTHONPATH=src
+```
+
 For later model training:
 
 ```powershell

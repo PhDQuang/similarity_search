@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import BinaryIO
 
 
-SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+PARAGRAPH_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+PARAGRAPH_BLANK_LINE_RE = re.compile(r"\n\s*\n+")
 SPACE_RE = re.compile(r"\s+")
 
 
@@ -18,24 +19,44 @@ class SentenceRecord:
     sentence_id: int
     text: str
     page: int | None = None
+    paragraph: int = 0
 
 
 def normalize_whitespace(text: str) -> str:
     return SPACE_RE.sub(" ", text.replace("\u00a0", " ")).strip()
 
 
-def split_sentences(text: str, page: int | None = None, min_chars: int = 8) -> list[SentenceRecord]:
-    parts = [normalize_whitespace(part) for part in SENTENCE_SPLIT_RE.split(text)]
+def split_paragraph_into_sentences(
+    text: str,
+    paragraph: int,
+    page: int | None = None,
+    min_chars: int = 8,
+) -> list[SentenceRecord]:
+    parts = [normalize_whitespace(part) for part in PARAGRAPH_SENTENCE_SPLIT_RE.split(text)]
     sentences = [part for part in parts if len(part) >= min_chars]
     return [
-        SentenceRecord(sentence_id=index + 1, text=sentence, page=page)
-        for index, sentence in enumerate(sentences)
+        SentenceRecord(sentence_id=0, text=sentence, page=page, paragraph=paragraph)
+        for sentence in sentences
     ]
+
+
+def split_text_into_paragraphs(text: str) -> list[str]:
+    blocks = [block.strip() for block in PARAGRAPH_BLANK_LINE_RE.split(text)]
+    blocks = [block for block in blocks if block]
+    if len(blocks) > 1:
+        return [normalize_whitespace(block) for block in blocks]
+    lines = [line.strip() for line in text.split("\n")]
+    return [normalize_whitespace(line) for line in lines if line]
 
 
 def renumber_sentences(sentences: list[SentenceRecord]) -> list[SentenceRecord]:
     return [
-        SentenceRecord(sentence_id=index + 1, text=sentence.text, page=sentence.page)
+        SentenceRecord(
+            sentence_id=index + 1,
+            text=sentence.text,
+            page=sentence.page,
+            paragraph=sentence.paragraph,
+        )
         for index, sentence in enumerate(sentences)
     ]
 
@@ -46,7 +67,10 @@ def extract_txt(file: BinaryIO) -> list[SentenceRecord]:
         text = raw
     else:
         text = raw.decode("utf-8", errors="ignore")
-    return renumber_sentences(split_sentences(text))
+    sentences: list[SentenceRecord] = []
+    for paragraph_index, paragraph_text in enumerate(split_text_into_paragraphs(text), start=1):
+        sentences.extend(split_paragraph_into_sentences(paragraph_text, paragraph=paragraph_index))
+    return renumber_sentences(sentences)
 
 
 def extract_pdf(file: BinaryIO) -> list[SentenceRecord]:
@@ -55,9 +79,18 @@ def extract_pdf(file: BinaryIO) -> list[SentenceRecord]:
     data = file.read()
     document = fitz.open(stream=data, filetype="pdf")
     sentences: list[SentenceRecord] = []
+    paragraph_index = 0
     for page_index, page in enumerate(document, start=1):
-        page_text = page.get_text("text")
-        sentences.extend(split_sentences(page_text, page=page_index))
+        blocks = page.get_text("blocks")
+        for block in blocks:
+            block_text = block[4] if len(block) > 4 else ""
+            block_text = normalize_whitespace(block_text)
+            if not block_text:
+                continue
+            paragraph_index += 1
+            sentences.extend(
+                split_paragraph_into_sentences(block_text, paragraph=paragraph_index, page=page_index)
+            )
     return renumber_sentences(sentences)
 
 
@@ -66,9 +99,15 @@ def extract_docx(file: BinaryIO) -> list[SentenceRecord]:
 
     data = BytesIO(file.read())
     document = Document(data)
-    paragraphs = [paragraph.text for paragraph in document.paragraphs]
-    text = "\n".join(paragraphs)
-    return renumber_sentences(split_sentences(text))
+    sentences: list[SentenceRecord] = []
+    paragraph_index = 0
+    for paragraph in document.paragraphs:
+        paragraph_text = normalize_whitespace(paragraph.text)
+        if not paragraph_text:
+            continue
+        paragraph_index += 1
+        sentences.extend(split_paragraph_into_sentences(paragraph_text, paragraph=paragraph_index))
+    return renumber_sentences(sentences)
 
 
 def extract_uploaded_file(uploaded_file: BinaryIO, filename: str) -> list[SentenceRecord]:
@@ -87,6 +126,7 @@ def sentence_table(sentences: list[SentenceRecord]) -> list[dict[str, object]]:
         {
             "sentence_id": sentence.sentence_id,
             "page": sentence.page if sentence.page is not None else "",
+            "paragraph": sentence.paragraph,
             "text": sentence.text,
         }
         for sentence in sentences

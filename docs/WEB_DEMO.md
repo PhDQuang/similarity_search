@@ -9,6 +9,13 @@ python -m pip install -r requirements-app.txt
 python -m pip install -e .
 ```
 
+`pip install -e .` requires Python >=3.10. On Python 3.9, skip that line and
+set `PYTHONPATH` instead:
+
+```powershell
+$env:PYTHONPATH = "src"
+```
+
 Run Streamlit:
 
 ```powershell

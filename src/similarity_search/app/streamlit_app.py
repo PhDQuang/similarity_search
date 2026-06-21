@@ -15,6 +15,7 @@ SRC_DIR = Path(__file__).resolve().parents[2]
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -25,6 +26,7 @@ from similarity_search.app.document_utils import (
     sentence_table,
 )
 from similarity_search.app.similarity_engine import (
+    MODELS_DIR,
     OUTPUTS_DIR,
     compare_documents,
     load_json,
@@ -46,28 +48,61 @@ MODEL_OPTIONS = [
 ]
 
 
-def apply_app_style() -> None:
-    st.markdown(
-        """
-        <style>
-        :root {
-            --word-bg: #eae7d6;
-            --pane-bg: #f7f8ef;
-            --pane-border: #b0d4b8;
-            --text-main: #26332e;
-            --text-muted: #60736b;
-            --accent: #5d7b6f;
-            --accent-soft: #a4c3a2;
-            --accent-pale: #d7f9fa;
-            --hit: #d7f9fa;
-            --hit-active: #b0d4b8;
-        }
+LIGHT_THEME_VARS = """
+    --word-bg: #eae7d6;
+    --pane-bg: #f7f8ef;
+    --pane-border: #b0d4b8;
+    --text-main: #26332e;
+    --text-muted: #60736b;
+    --accent: #5d7b6f;
+    --accent-soft: #a4c3a2;
+    --accent-pale: #d7f9fa;
+    --hit: #d7f9fa;
+    --hit-active: #b0d4b8;
+    --header-bg: #10241c;
+    --surface: #ffffff;
+    --surface-hover: #eaf3e8;
+    --page-bg: #ffffff;
+    --page-text: #1f1f1f;
+    --page-border: #d6d2c3;
+    --page-shadow: rgba(0, 0, 0, 0.14);
+    --result-bg: rgba(255, 255, 255, 0.42);
+    --result-border: rgba(176, 212, 184, 0.7);
+    --empty-text: #8a8a8a;
+"""
+
+DARK_THEME_VARS = """
+    --word-bg: #161a18;
+    --pane-bg: #1d2320;
+    --pane-border: #3a4a42;
+    --text-main: #e6ebe7;
+    --text-muted: #9bb0a6;
+    --accent: #7fae9b;
+    --accent-soft: #4d6a5e;
+    --accent-pale: #234547;
+    --hit: #2c4a4b;
+    --hit-active: #3f6358;
+    --header-bg: #0a120f;
+    --surface: #232a27;
+    --surface-hover: #2c3a33;
+    --page-bg: #20262a;
+    --page-text: #e6e8e3;
+    --page-border: #3a4138;
+    --page-shadow: rgba(0, 0, 0, 0.55);
+    --result-bg: rgba(255, 255, 255, 0.05);
+    --result-border: rgba(127, 174, 155, 0.4);
+    --empty-text: #8aa098;
+"""
+
+
+REST_CSS = """
         .stApp {
             background: var(--word-bg);
             color: var(--text-main);
+            transition: background 0.2s ease, color 0.2s ease;
         }
         header[data-testid="stHeader"] {
-            background: #10241c;
+            background: var(--header-bg);
             border-bottom: 1px solid var(--accent);
         }
         .block-container {
@@ -75,9 +110,10 @@ def apply_app_style() -> None:
             padding: 3.25rem 1rem 1rem;
         }
         h1 {
-            font-size: 1.1rem !important;
-            font-weight: 600 !important;
-            margin: 0 0 0.35rem !important;
+            font-size: 1.5rem !important;
+            font-weight: 700 !important;
+            letter-spacing: -0.01em;
+            margin: 0 0 0.15rem !important;
             color: var(--text-main);
         }
         h2, h3 {
@@ -86,7 +122,7 @@ def apply_app_style() -> None:
             margin: 0 0 0.4rem !important;
         }
         div[data-testid="stTabs"] > div[role="tablist"] {
-            background: #f7f8ef;
+            background: var(--pane-bg);
             border-bottom: 1px solid var(--pane-border);
             border-left: 0;
             border-right: 0;
@@ -107,7 +143,7 @@ def apply_app_style() -> None:
         div[data-testid="stNumberInput"] input,
         div[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
         div[data-baseweb="select"] > div {
-            background: #ffffff !important;
+            background: var(--surface) !important;
             border: 1px solid var(--pane-border) !important;
             color: var(--text-main) !important;
             border-radius: 6px !important;
@@ -127,7 +163,7 @@ def apply_app_style() -> None:
         button[data-testid="baseButton-secondary"],
         button[data-testid="baseButton-minimal"],
         button[data-baseweb="button"] {
-            background: #f7f8ef !important;
+            background: var(--pane-bg) !important;
             border: 1px solid var(--pane-border) !important;
             color: var(--text-main) !important;
             border-radius: 6px !important;
@@ -140,9 +176,9 @@ def apply_app_style() -> None:
         button[data-testid="baseButton-secondary"]:hover,
         button[data-testid="baseButton-minimal"]:hover,
         button[data-baseweb="button"]:hover {
-            background: #eaf3e8 !important;
+            background: var(--surface-hover) !important;
             border-color: var(--accent-soft) !important;
-            color: #20352d !important;
+            color: var(--text-main) !important;
         }
         div.stButton > button[kind="primary"],
         button[data-testid="baseButton-primary"] {
@@ -155,7 +191,7 @@ def apply_app_style() -> None:
             min-width: 2rem !important;
         }
         div[data-testid="stFileUploaderDropzone"] {
-            background: #ffffff !important;
+            background: var(--surface) !important;
             border: 1px solid var(--pane-border) !important;
             color: var(--text-main) !important;
             min-height: 44px;
@@ -166,7 +202,7 @@ def apply_app_style() -> None:
             color: var(--text-main) !important;
         }
         div[data-testid="stFileUploaderFile"] {
-            background: #eaf3e8 !important;
+            background: var(--surface-hover) !important;
             border: 1px solid var(--pane-border) !important;
             border-radius: 6px !important;
             color: var(--text-main) !important;
@@ -176,13 +212,16 @@ def apply_app_style() -> None:
         }
         div[data-testid="stDataFrame"],
         div[data-testid="stTable"] {
-            background: #ffffff !important;
+            background: var(--surface) !important;
             color: var(--text-main) !important;
             border: 1px solid var(--pane-border);
             border-radius: 6px;
         }
         div[data-testid="stVerticalBlockBorderWrapper"] {
             border-radius: 0;
+        }
+        div[data-testid="stCheckbox"] label p {
+            color: var(--text-muted) !important;
         }
         .word-pane {
             background: var(--pane-bg);
@@ -204,14 +243,14 @@ def apply_app_style() -> None:
             margin: 0.45rem 0 0.6rem;
         }
         .word-result {
-            background: rgba(255, 255, 255, 0.42);
-            border: 1px solid rgba(176, 212, 184, 0.7);
+            background: var(--result-bg);
+            border: 1px solid var(--result-border);
             border-radius: 6px;
             margin-bottom: 0.55rem;
             padding: 0.6rem 0.65rem;
         }
         .word-result-active {
-            background: #eaf3e8;
+            background: var(--surface-hover);
             border-left: 3px solid var(--accent);
             padding-left: 0.45rem;
         }
@@ -237,10 +276,10 @@ def apply_app_style() -> None:
             padding: 0 1rem 1.25rem;
         }
         .word-page {
-            background: #ffffff;
-            border: 1px solid #d6d2c3;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
-            color: #1f1f1f;
+            background: var(--page-bg);
+            border: 1px solid var(--page-border);
+            box-shadow: 0 1px 3px var(--page-shadow);
+            color: var(--page-text);
             font-family: Georgia, "Times New Roman", serif;
             font-size: 15.5px;
             line-height: 1.72;
@@ -249,6 +288,12 @@ def apply_app_style() -> None:
             min-height: 980px;
             padding: 4.8rem 5.3rem;
         }
+        .word-page p {
+            margin: 0 0 0.95rem;
+        }
+        .word-page p:last-child {
+            margin-bottom: 0;
+        }
         .word-page-meta {
             color: var(--text-muted);
             font-family: Arial, sans-serif;
@@ -256,7 +301,7 @@ def apply_app_style() -> None:
             margin-bottom: 1rem;
         }
         .word-empty-page {
-            color: #8a8a8a;
+            color: var(--empty-text);
             font-family: Arial, sans-serif;
             font-size: 0.92rem;
             text-align: center;
@@ -273,7 +318,7 @@ def apply_app_style() -> None:
             scroll-margin-top: 5.5rem;
         }
         .settings-section {
-            border-top: 1px solid rgba(176, 212, 184, 0.65);
+            border-top: 1px solid var(--pane-border);
             margin-top: 0.75rem;
             padding-top: 0.75rem;
         }
@@ -283,7 +328,95 @@ def apply_app_style() -> None:
             color: var(--text-muted) !important;
         }
         div[data-testid="stMetricValue"] {
-            font-size: 1.15rem;
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: var(--text-main) !important;
+        }
+        div[data-testid="stMetric"] {
+            background: var(--surface);
+            border: 1px solid var(--pane-border);
+            border-radius: 10px;
+            padding: 0.7rem 0.9rem;
+            box-shadow: 0 1px 2px var(--page-shadow);
+            transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+        }
+        div[data-testid="stMetric"]:hover {
+            transform: translateY(-1px);
+            border-color: var(--accent-soft);
+            box-shadow: 0 4px 10px var(--page-shadow);
+        }
+        div[data-testid="stMetricLabel"] p {
+            font-size: 0.74rem !important;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .app-header {
+            margin-bottom: 0.15rem;
+        }
+        .app-subtitle {
+            color: var(--text-muted);
+            font-size: 0.82rem;
+            margin: 0 0 0.4rem;
+        }
+        .section-header {
+            align-items: center;
+            color: var(--text-main);
+            display: flex;
+            font-size: 0.92rem;
+            font-weight: 600;
+            gap: 0.5rem;
+            margin: 1.15rem 0 0.6rem;
+        }
+        .section-header .section-bar {
+            background: var(--accent);
+            border-radius: 2px;
+            display: inline-block;
+            height: 0.95rem;
+            width: 3px;
+        }
+        button[role="tab"] {
+            border-radius: 6px 6px 0 0 !important;
+            font-weight: 600 !important;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+        button[role="tab"]:hover {
+            background: var(--surface-hover) !important;
+            color: var(--text-main) !important;
+        }
+        div.stButton > button,
+        div[data-testid="stDownloadButton"] button {
+            transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+        }
+        div.stButton > button:hover,
+        div[data-testid="stDownloadButton"] button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 3px 8px var(--page-shadow);
+        }
+        div.stButton > button:active,
+        div[data-testid="stDownloadButton"] button:active {
+            transform: translateY(0);
+            box-shadow: none;
+        }
+        div[data-testid="stExpander"] {
+            border: 1px solid var(--pane-border) !important;
+            border-radius: 10px !important;
+            background: var(--pane-bg) !important;
+            overflow: hidden;
+        }
+        div[data-testid="stExpander"] summary,
+        div[data-testid="stExpander"] details > summary {
+            font-weight: 600;
+            color: var(--text-main) !important;
+        }
+        div[data-testid="stExpander"] summary:hover {
+            color: var(--accent) !important;
+        }
+        div[data-testid="stDataFrame"],
+        div[data-testid="stTable"] {
+            overflow: hidden;
+        }
+        div[data-testid="stAlert"] {
+            border-radius: 8px;
         }
         @media (max-width: 1050px) {
             .word-page {
@@ -291,8 +424,30 @@ def apply_app_style() -> None:
                 min-height: 760px;
             }
         }
-        </style>
-        """,
+        @media (max-width: 700px) {
+            .block-container {
+                padding: 2.5rem 0.5rem 1rem;
+            }
+            .word-page {
+                padding: 1.6rem 1.2rem;
+                min-height: auto;
+                font-size: 14.5px;
+            }
+            .word-pane {
+                min-height: auto;
+            }
+            .word-workspace {
+                min-height: auto;
+                padding: 0 0.4rem 1rem;
+            }
+        }
+        """
+
+
+def apply_app_style(dark: bool = False) -> None:
+    theme_vars = DARK_THEME_VARS if dark else LIGHT_THEME_VARS
+    st.markdown(
+        f"<style>:root {{{theme_vars}}}{REST_CSS}</style>",
         unsafe_allow_html=True,
     )
 
@@ -364,10 +519,17 @@ def chunk_sentences(sentences: list[SentenceRecord], chunk_size: int = 34) -> li
             page = sentence.page if sentence.page is not None else 1
             pages.setdefault(page, []).append(sentence)
         return [(f"Page {page}", page_sentences) for page, page_sentences in sorted(pages.items())]
-    return [
-        (f"Page {index + 1}", sentences[start : start + chunk_size])
-        for index, start in enumerate(range(0, len(sentences), chunk_size))
-    ]
+
+    chunks: list[list[SentenceRecord]] = []
+    current_chunk: list[SentenceRecord] = []
+    for paragraph_sentences in group_by_paragraph(sentences):
+        if current_chunk and len(current_chunk) + len(paragraph_sentences) > chunk_size:
+            chunks.append(current_chunk)
+            current_chunk = []
+        current_chunk.extend(paragraph_sentences)
+    if current_chunk:
+        chunks.append(current_chunk)
+    return [(f"Page {index + 1}", chunk) for index, chunk in enumerate(chunks)]
 
 
 def sentence_html(
@@ -382,6 +544,18 @@ def sentence_html(
     if sentence.sentence_id == active_sentence_id:
         classes += " sentence-hit-active"
     return f'<span id="sentence-{sentence.sentence_id}" class="{classes}">{text}</span>'
+
+
+def group_by_paragraph(sentences: list[SentenceRecord]) -> list[list[SentenceRecord]]:
+    groups: list[list[SentenceRecord]] = []
+    current_paragraph: int | None = None
+    for sentence in sentences:
+        if current_paragraph is None or sentence.paragraph != current_paragraph:
+            groups.append([sentence])
+            current_paragraph = sentence.paragraph
+        else:
+            groups[-1].append(sentence)
+    return groups
 
 
 def render_document(
@@ -402,14 +576,17 @@ def render_document(
 
     pages_html = []
     for page_label, page_sentences in chunk_sentences(sentences):
-        body = " ".join(
-            sentence_html(sentence, result_ids, active_sentence_id)
-            for sentence in page_sentences
-        )
+        paragraphs_html = []
+        for paragraph_sentences in group_by_paragraph(page_sentences):
+            paragraph_body = " ".join(
+                sentence_html(sentence, result_ids, active_sentence_id)
+                for sentence in paragraph_sentences
+            )
+            paragraphs_html.append(f"<p>{paragraph_body}</p>")
         pages_html.append(
             '<div class="word-page">'
             f'<div class="word-page-meta">{escape(filename or "Document")} - {escape(page_label)}</div>'
-            f"<p>{body}</p>"
+            f"{''.join(paragraphs_html)}"
             "</div>"
         )
     st.markdown(
@@ -444,6 +621,16 @@ def result_summary(result) -> str:
     return f"{page} - {result.score:.3f} - {label}"
 
 
+def render_score_chart(results: list) -> None:
+    if len(results) < 2:
+        return
+    chart_frame = pd.DataFrame(
+        {f"#{rank}": result.score for rank, result in enumerate(results, start=1)}.items(),
+        columns=["Result", "Score"],
+    ).set_index("Result")
+    st.bar_chart(chart_frame)
+
+
 def render_results(results: list) -> None:
     if not results:
         st.markdown('<div class="word-search-meta">0 results</div>', unsafe_allow_html=True)
@@ -453,6 +640,7 @@ def render_results(results: list) -> None:
         f'<div class="word-search-meta">{len(results)} results</div>',
         unsafe_allow_html=True,
     )
+    render_score_chart(results)
     for rank, result in enumerate(results, start=1):
         active = st.session_state.get("active_sentence_id") == result.sentence_id
         if st.button(
@@ -523,6 +711,13 @@ def matches_frame(matches) -> pd.DataFrame:
 
 def metric_card(label: str, value: str) -> None:
     st.metric(label, value)
+
+
+def section_header(text: str) -> None:
+    st.markdown(
+        f'<div class="section-header"><span class="section-bar"></span>{escape(text)}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def sidebar() -> None:
@@ -709,35 +904,58 @@ def compare_documents_tab() -> None:
                 st.dataframe(pd.DataFrame(sentence_table(sentences_b)), use_container_width=True, hide_index=True)
 
 
+def numeric_columns(frame: pd.DataFrame) -> list[str]:
+    return [column for column in frame.columns if pd.api.types.is_numeric_dtype(frame[column])]
+
+
+def model_name_column(frame: pd.DataFrame) -> str | None:
+    for column in frame.columns:
+        if not pd.api.types.is_numeric_dtype(frame[column]):
+            return column
+    return None
+
+
+def render_comparison_chart(frame: pd.DataFrame, title: str) -> None:
+    name_column = model_name_column(frame)
+    score_columns = numeric_columns(frame)
+    if name_column is None or not score_columns:
+        return
+    section_header(title)
+    chart_frame = frame[[name_column, *score_columns]].melt(
+        id_vars=name_column, var_name="Metric", value_name="Value"
+    )
+    chart = (
+        alt.Chart(chart_frame)
+        .mark_bar()
+        .encode(
+            x=alt.X(f"{name_column}:N", title=None, axis=alt.Axis(labelAngle=0)),
+            xOffset=alt.XOffset("Metric:N"),
+            y=alt.Y("Value:Q", title=None),
+            color=alt.Color("Metric:N", legend=alt.Legend(orient="bottom", title=None)),
+            tooltip=[name_column, "Metric", alt.Tooltip("Value:Q", format=".4f")],
+        )
+        .properties(height=320)
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+
 def benchmark_tab() -> None:
     st.subheader("Benchmark")
 
     final_summary_path = OUTPUTS_DIR / "tables" / "final_model_summary.csv"
+    cross_metadata = load_json(OUTPUTS_DIR / "cross_encoder_outputs" / "cross_encoder_training_metadata.json")
+
+    # --- Main view: headline model comparison ---
     if final_summary_path.exists():
-        st.markdown("**Final Model Summary**")
-        st.dataframe(pd.read_csv(final_summary_path), use_container_width=True, hide_index=True)
-
-    ablation_path = OUTPUTS_DIR / "tables" / "tfidf_preprocessing_ablation.csv"
-    if ablation_path.exists():
-        st.markdown("**TF-IDF Preprocessing Ablation**")
-        st.dataframe(pd.read_csv(ablation_path), use_container_width=True, hide_index=True)
-
-    comparison_path = OUTPUTS_DIR / "finetuned_minilm" / "model_comparison.csv"
-    fallback_comparison_path = OUTPUTS_DIR / "tables" / "model_comparison.csv"
-    if comparison_path.exists():
-        st.markdown("**MiniLM Comparison**")
-        comparison = pd.read_csv(comparison_path)
-        st.dataframe(comparison, use_container_width=True, hide_index=True)
-    elif fallback_comparison_path.exists():
-        st.markdown("**Baseline Comparison**")
-        comparison = pd.read_csv(fallback_comparison_path)
-        st.dataframe(comparison, use_container_width=True, hide_index=True)
-    elif not final_summary_path.exists():
+        final_summary = pd.read_csv(final_summary_path)
+        render_comparison_chart(final_summary, "Final Model Summary")
+        st.dataframe(final_summary, use_container_width=True, hide_index=True)
+    else:
         st.info("Model comparison table not found yet.")
 
-    cross_metadata = load_json(OUTPUTS_DIR / "cross_encoder_outputs" / "cross_encoder_training_metadata.json")
+    # --- Main view: best reranker headline metrics ---
     if cross_metadata:
-        st.markdown("**Cross-Encoder Summary**")
+        section_header("Cross-Encoder reranker — key metrics")
         col_a, col_b, col_c, col_d = st.columns(4)
         with col_a:
             metric_card("NLI accuracy", f"{cross_metadata['test_nli_metrics']['test_accuracy']:.4f}")
@@ -748,13 +966,60 @@ def benchmark_tab() -> None:
         with col_d:
             metric_card("Rerank MRR", f"{cross_metadata['retrieval_rerank']['mrr']:.4f}")
 
-        with st.expander("Cross-Encoder metadata"):
-            st.json(cross_metadata)
+    # --- Secondary details tucked away to keep the view clean ---
+    with st.expander("More details"):
+        ablation_path = OUTPUTS_DIR / "tables" / "tfidf_preprocessing_ablation.csv"
+        if ablation_path.exists():
+            st.markdown("**TF-IDF Preprocessing Ablation**")
+            st.dataframe(pd.read_csv(ablation_path), use_container_width=True, hide_index=True)
 
-    confusion_path = OUTPUTS_DIR / "cross_encoder_outputs" / "cross_encoder_confusion_matrix.csv"
-    if confusion_path.exists():
-        st.markdown("**Cross-Encoder Confusion Matrix**")
-        st.dataframe(pd.read_csv(confusion_path, index_col=0), use_container_width=True)
+        comparison_path = OUTPUTS_DIR / "finetuned_minilm" / "model_comparison.csv"
+        fallback_comparison_path = OUTPUTS_DIR / "tables" / "model_comparison.csv"
+        if comparison_path.exists():
+            st.markdown("**MiniLM Comparison**")
+            st.dataframe(pd.read_csv(comparison_path), use_container_width=True, hide_index=True)
+        elif fallback_comparison_path.exists():
+            st.markdown("**Baseline Comparison**")
+            st.dataframe(pd.read_csv(fallback_comparison_path), use_container_width=True, hide_index=True)
+
+        confusion_path = OUTPUTS_DIR / "cross_encoder_outputs" / "cross_encoder_confusion_matrix.csv"
+        if confusion_path.exists():
+            st.markdown("**Cross-Encoder Confusion Matrix**")
+            confusion_frame = pd.read_csv(confusion_path, index_col=0)
+            try:
+                styled_confusion = confusion_frame.style.background_gradient(cmap="Greens")
+                st.dataframe(styled_confusion, use_container_width=True)
+            except ImportError:
+                st.dataframe(confusion_frame, use_container_width=True)
+
+        sftbe_dir = MODELS_DIR / "sftbe_checkpoint"
+        loss_summary = load_json(sftbe_dir / "stage0_interval_loss_summary.json")
+        if loss_summary:
+            st.markdown("**SFT-BE Training Progress (Stage 0 distillation)**")
+            points = pd.DataFrame(loss_summary["points"]).sort_values("global_step")
+            chart_frame = points.set_index("global_step")[["interval_loss_reconstructed", "interval_cosine_approx"]]
+            chart_frame.columns = ["Loss", "Cosine similarity to teacher"]
+            st.line_chart(chart_frame)
+            col_a, col_b = st.columns(2)
+            with col_a:
+                metric_card("Final loss", f"{loss_summary['last_interval_loss_reconstructed']:.4f}")
+            with col_b:
+                metric_card("Final cosine vs teacher", f"{points.iloc[-1]['interval_cosine_approx']:.4f}")
+
+        tail_eval = load_json(sftbe_dir / "stage0_tail10mb_eval.json")
+        if tail_eval:
+            st.markdown("**SFT-BE Held-out Eval (tail 10MB Wikipedia, unseen during training)**")
+            col_a, col_b, col_c = st.columns(3)
+            with col_a:
+                metric_card("Test cosine vs teacher", f"{tail_eval['test_cosine']:.4f}")
+            with col_b:
+                metric_card("Test loss", f"{tail_eval['test_loss']:.4f}")
+            with col_c:
+                metric_card("Test samples", f"{tail_eval['test_samples']:,}")
+
+        if cross_metadata:
+            st.markdown("**Cross-Encoder metadata**")
+            st.json(cross_metadata)
 
 
 def main() -> None:
@@ -763,8 +1028,20 @@ def main() -> None:
         page_icon="",
         layout="wide",
     )
-    apply_app_style()
-    st.title("Semantic Similarity Search")
+    st.session_state.setdefault("dark_mode", False)
+    apply_app_style(dark=st.session_state["dark_mode"])
+
+    title_col, toggle_col = st.columns([0.85, 0.15])
+    with title_col:
+        st.markdown('<div class="app-header">', unsafe_allow_html=True)
+        st.title("Semantic Similarity Search")
+        st.markdown(
+            '<p class="app-subtitle">Tìm kiếm và đối chiếu câu theo ngữ nghĩa — TF-IDF, MiniLM, SFT-BE và Cross-Encoder NLI.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+    with toggle_col:
+        st.checkbox("Dark mode", key="dark_mode")
 
     search_tab, compare_tab, benchmarks = st.tabs(
         ["Semantic Search", "Compare Documents", "Benchmark"]

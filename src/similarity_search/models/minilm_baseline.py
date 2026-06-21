@@ -186,7 +186,7 @@ def main() -> None:
         "model": {
             "name": args.model_name,
             "device": str(model.device),
-            "embedding_dimension": int(model.get_embedding_dimension()),
+            "embedding_dimension": int(model.get_sentence_embedding_dimension()),
             "trained_in_project": args.trained_in_project,
         },
         "threshold_selection": {

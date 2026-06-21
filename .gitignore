@@ -24,6 +24,7 @@ data/processed/*
 outputs/*
 models/*
 checkpoints/*
+/processed/
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !outputs/figures/.gitkeep
