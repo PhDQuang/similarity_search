@@ -39,7 +39,14 @@ similarity_search/
       app/
       evaluation/
       models/
+      sftbe/
+        prepare_data.py
+        train.py
+        evaluate.py
+        model/
   models/
+    sftbe_checkpoint/
+      stage0_final.pt
   requirements.txt
   pyproject.toml
 ```
@@ -134,6 +141,63 @@ The MiniLM metrics and the shared comparison table are written to:
 ```text
 outputs/minilm_baseline/metrics.json
 outputs/tables/model_comparison.csv
+```
+
+## Run the custom SFT-BE checkpoint
+
+The former root-level `src/` model code has been merged into the installable
+package as `similarity_search.sftbe`. The Stage 0 checkpoint is a trained model
+artifact and is expected locally at:
+
+```text
+models/sftbe_checkpoint/stage0_final.pt
+```
+
+Evaluate the checkpoint on STS-B:
+
+```powershell
+python -m similarity_search.sftbe.evaluate
+```
+
+Prepare the distillation cache and continue training:
+
+```powershell
+python -m similarity_search.sftbe.prepare_data
+python -m similarity_search.sftbe.train
+```
+
+The Streamlit demo includes `SFT-BE checkpoint` as a model option for semantic
+search and document comparison. The `models/` directory is ignored by Git, so
+large checkpoints should be shared through Google Drive, Hugging Face Hub, or
+another artifact store instead of GitHub.
+
+Evaluate SFT-BE on the same AllNLI pair-class protocol used by TF-IDF and
+MiniLM:
+
+```powershell
+$env:PYTHONPATH="src"
+python -m similarity_search.models.sftbe_evaluation
+```
+
+Create the TF-IDF preprocessing ablation table:
+
+```powershell
+$env:PYTHONPATH="src"
+python -m similarity_search.models.tfidf_preprocessing_ablation
+```
+
+Build the final report summary table:
+
+```powershell
+python scripts/build_final_model_summary.py
+```
+
+Outputs:
+
+```text
+outputs/sftbe_checkpoint/metrics.json
+outputs/tables/tfidf_preprocessing_ablation.csv
+outputs/tables/final_model_summary.csv
 ```
 
 ## Fine-tune MiniLM on Kaggle

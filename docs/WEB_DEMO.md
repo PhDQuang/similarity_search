@@ -42,6 +42,7 @@ The web app can use these local folders when present:
 models/tfidf_baseline/vectorizer.joblib
 models/allnli-minilm-biencoder/final/
 models/allnli-cross-encoder-nli/final/
+models/sftbe_checkpoint/stage0_final.pt
 ```
 
 If the fine-tuned Bi-Encoder is missing, the app falls back to
@@ -59,7 +60,10 @@ Tab 1: Semantic Search
   - Pretrained MiniLM.
   - Fine-tuned MiniLM.
   - Cross-Encoder NLI.
-  - Hybrid reranker.
+  - TF-IDF + Cross-Encoder.
+  - Pretrained MiniLM + Cross-Encoder.
+  - Fine-tuned MiniLM + Cross-Encoder.
+  - SFT-BE + Cross-Encoder.
 - Get ranked matching sentences with scores and NLI labels when available.
 
 Tab 2: Compare Documents
@@ -79,11 +83,11 @@ Tab 3: Benchmark
 
 ## Recommended demo script
 
-Use `Hybrid reranker` as the main model:
+Use `SFT-BE + Cross-Encoder` or `Fine-tuned MiniLM + Cross-Encoder` as the main model:
 
 ```text
-Fine-tuned MiniLM retrieves top candidate sentences quickly.
-Cross-Encoder NLI reranks candidates and provides entailment probability.
+The model before "+" retrieves top candidate sentences quickly.
+Cross-Encoder NLI reranks those candidates and provides entailment probability.
 ```
 
 Suggested thresholds:
@@ -94,10 +98,13 @@ Suggested thresholds:
 | Pretrained MiniLM | 0.58 |
 | Fine-tuned MiniLM | 0.56 |
 | Cross-Encoder NLI | 0.36 |
-| Hybrid reranker | 0.62 |
+| TF-IDF + Cross-Encoder | 0.55 |
+| Pretrained MiniLM + Cross-Encoder | 0.62 |
+| Fine-tuned MiniLM + Cross-Encoder | 0.62 |
+| SFT-BE + Cross-Encoder | 0.62 |
 
-For long documents, prefer Hybrid over pure Cross-Encoder because pure
-Cross-Encoder must score many sentence pairs.
+For long documents, prefer a combined mode over pure Cross-Encoder because pure
+Cross-Encoder must score every sentence pair.
 
 ## Files to commit
 

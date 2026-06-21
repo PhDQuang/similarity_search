@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -17,12 +18,23 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MODELS_DIR = PROJECT_ROOT / "models"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+
 TFIDF_DIR = MODELS_DIR / "tfidf_baseline"
 BI_ENCODER_DIR = MODELS_DIR / "allnli-minilm-biencoder" / "final"
 CROSS_ENCODER_DIR = MODELS_DIR / "allnli-cross-encoder-nli" / "final"
+SFTBE_CHECKPOINT_PATH = MODELS_DIR / "sftbe_checkpoint" / "stage0_final.pt"
 
 PRETRAINED_MINILM = "sentence-transformers/all-MiniLM-L6-v2"
 LABEL_NAMES = {0: "entailment", 1: "neutral", 2: "contradiction"}
+
+HYBRID_RETRIEVERS = {
+    "TF-IDF + Cross-Encoder": "TF-IDF baseline",
+    "Pretrained MiniLM + Cross-Encoder": "Pretrained MiniLM",
+    "Fine-tuned MiniLM + Cross-Encoder": "Fine-tuned MiniLM",
+    "SFT-BE + Cross-Encoder": "SFT-BE checkpoint",
+}
 
 
 @dataclass(frozen=True)
@@ -69,6 +81,7 @@ def model_status() -> dict[str, bool]:
         "tfidf": (TFIDF_DIR / "vectorizer.joblib").exists(),
         "fine_tuned_biencoder": (BI_ENCODER_DIR / "model.safetensors").exists(),
         "cross_encoder": (CROSS_ENCODER_DIR / "model.safetensors").exists(),
+        "sftbe": SFTBE_CHECKPOINT_PATH.exists(),
     }
 
 
@@ -84,13 +97,122 @@ def load_tfidf_vectorizer() -> Any:
 
 @lru_cache(maxsize=3)
 def load_sentence_transformer(model_choice: str) -> Any:
-    from sentence_transformers import SentenceTransformer
-
     if model_choice == "Fine-tuned MiniLM":
         model_name = str(BI_ENCODER_DIR) if BI_ENCODER_DIR.exists() else PRETRAINED_MINILM
     else:
         model_name = PRETRAINED_MINILM
-    return SentenceTransformer(model_name)
+    return TransformerEmbedder(model_name)
+
+
+class TransformerEmbedder:
+    def __init__(self, model_name: str) -> None:
+        import torch
+        from transformers import AutoModel, AutoTokenizer
+
+        self.torch = torch
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModel.from_pretrained(model_name)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model.to(self.device)
+        self.model.eval()
+
+    def encode(
+        self,
+        texts: list[str],
+        batch_size: int = 64,
+        convert_to_numpy: bool = True,
+        normalize_embeddings: bool = True,
+        show_progress_bar: bool = False,
+    ) -> np.ndarray:
+        _ = show_progress_bar
+        embeddings: list[np.ndarray] = []
+        for start in range(0, len(texts), batch_size):
+            batch = texts[start : start + batch_size]
+            encoded = self.tokenizer(
+                batch,
+                truncation=True,
+                padding=True,
+                max_length=256,
+                return_tensors="pt",
+            )
+            encoded = {key: value.to(self.device) for key, value in encoded.items()}
+            with self.torch.no_grad():
+                output = self.model(**encoded).last_hidden_state
+                attention_mask = encoded["attention_mask"].unsqueeze(-1)
+                masked = output * attention_mask
+                summed = masked.sum(dim=1)
+                counts = attention_mask.sum(dim=1).clamp(min=1)
+                batch_embeddings = summed / counts
+                if normalize_embeddings:
+                    batch_embeddings = self.torch.nn.functional.normalize(batch_embeddings, p=2, dim=1)
+            embeddings.append(batch_embeddings.detach().cpu().numpy())
+        result = np.vstack(embeddings) if embeddings else np.empty((0, 0), dtype=np.float32)
+        if convert_to_numpy:
+            return result
+        return result
+
+
+@lru_cache(maxsize=1)
+def load_sftbe_model() -> Any:
+    return SFTBEEmbedder(SFTBE_CHECKPOINT_PATH)
+
+
+class SFTBEEmbedder:
+    def __init__(self, checkpoint_path: Path) -> None:
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"SFT-BE checkpoint not found: {checkpoint_path}")
+
+        import torch
+
+        from similarity_search.sftbe.config import DATA_CONFIG, MODEL_CONFIG, get_device
+        from similarity_search.sftbe.dataset import get_tokenizer
+        from similarity_search.sftbe.model import create_sftbe_model
+
+        self.torch = torch
+        self.max_length = MODEL_CONFIG["max_seq_length"]
+        self.device = get_device()
+        self.tokenizer = get_tokenizer(DATA_CONFIG["tokenizer_name"])
+        self.model = create_sftbe_model(MODEL_CONFIG).to(self.device)
+
+        state = torch.load(checkpoint_path, map_location=self.device, weights_only=True)
+        self.model.load_state_dict(state.get("model_state_dict", state))
+        self.model.eval()
+
+    def encode(
+        self,
+        texts: list[str],
+        batch_size: int = 64,
+        convert_to_numpy: bool = True,
+        normalize_embeddings: bool = True,
+        show_progress_bar: bool = False,
+    ) -> np.ndarray:
+        _ = show_progress_bar
+        embeddings: list[np.ndarray] = []
+        for start in range(0, len(texts), batch_size):
+            batch = texts[start : start + batch_size]
+            encoded = self.tokenizer(
+                batch,
+                truncation=True,
+                padding=True,
+                max_length=self.max_length,
+                return_tensors="pt",
+            )
+            input_ids = encoded["input_ids"].to(self.device)
+            attention_mask = encoded["attention_mask"].to(self.device)
+            with self.torch.no_grad():
+                batch_embeddings = self.model(input_ids, attention_mask)
+                if normalize_embeddings:
+                    batch_embeddings = self.torch.nn.functional.normalize(
+                        batch_embeddings,
+                        p=2,
+                        dim=1,
+                    )
+            embeddings.append(batch_embeddings.detach().cpu().numpy())
+
+        result = np.vstack(embeddings) if embeddings else np.empty((0, self.model.hidden_size), dtype=np.float32)
+        if convert_to_numpy:
+            return result
+        return result
 
 
 @lru_cache(maxsize=1)
@@ -112,6 +234,24 @@ def tfidf_scores(query: str, sentences: list[str]) -> np.ndarray:
     sentence_vectors = vectorizer.transform(sentences)
     query_vector = vectorizer.transform([query])
     return np.asarray(sentence_vectors.dot(query_vector.T).todense()).ravel()
+
+
+def load_embedding_model(model_choice: str) -> Any:
+    if model_choice == "SFT-BE checkpoint":
+        return load_sftbe_model()
+    return load_sentence_transformer(model_choice)
+
+
+def retriever_scores(model_choice: str, query: str, sentences: list[str]) -> np.ndarray:
+    if model_choice == "TF-IDF baseline":
+        return tfidf_scores(query, sentences)
+    return embedding_scores(load_embedding_model(model_choice), query, sentences)
+
+
+def retriever_pair_matrix(model_choice: str, left: list[str], right: list[str]) -> np.ndarray:
+    if model_choice == "TF-IDF baseline":
+        return tfidf_pair_matrix(left, right)
+    return pair_embedding_matrix(load_embedding_model(model_choice), left, right)
 
 
 def embedding_scores(model: Any, query: str, sentences: list[str], batch_size: int = 64) -> np.ndarray:
@@ -228,23 +368,28 @@ def semantic_search(
                 )
         return sorted(results, key=lambda item: item.score, reverse=True)[:top_k]
 
-    bi_model_choice = "Fine-tuned MiniLM" if model_choice == "Hybrid reranker" else model_choice
-    bi_model = load_sentence_transformer(bi_model_choice)
-    cosine_scores = embedding_scores(bi_model, query, texts)
+    retriever_choice = HYBRID_RETRIEVERS.get(model_choice, model_choice)
+    retriever_candidate_scores = retriever_scores(retriever_choice, query, texts)
 
-    if model_choice != "Hybrid reranker":
-        return ranked_search_results(sentences, cosine_scores, threshold, top_k, cosine_scores)
+    if model_choice not in HYBRID_RETRIEVERS:
+        return ranked_search_results(
+            sentences,
+            retriever_candidate_scores,
+            threshold,
+            top_k,
+            retriever_candidate_scores,
+        )
 
     candidate_count = min(max(top_k, rerank_top_k), len(sentences))
-    candidate_indices = np.argsort(-cosine_scores)[:candidate_count]
+    candidate_indices = np.argsort(-retriever_candidate_scores)[:candidate_count]
     pairs = [(sentences[index].text, query) for index in candidate_indices]
     cross_outputs = cross_encoder_predict(pairs)
 
     results: list[SearchResult] = []
     for index, cross in zip(candidate_indices, cross_outputs):
         entailment = float(cross["entailment_probability"])
-        cosine = float(cosine_scores[index])
-        score = alpha * entailment + (1.0 - alpha) * cosine
+        retrieval_score = float(retriever_candidate_scores[index])
+        score = alpha * entailment + (1.0 - alpha) * retrieval_score
         if score >= threshold:
             sentence = sentences[int(index)]
             results.append(
@@ -253,7 +398,7 @@ def semantic_search(
                     text=sentence.text,
                     page=sentence.page,
                     score=score,
-                    cosine_score=cosine,
+                    cosine_score=retrieval_score,
                     entailment_probability=entailment,
                     neutral_probability=float(cross["neutral_probability"]),
                     contradiction_probability=float(cross["contradiction_probability"]),
@@ -319,21 +464,20 @@ def compare_documents(
         )
         return similarity_percent(len(left_texts), len(right_texts), len(matches)), matches
 
-    bi_model_choice = "Fine-tuned MiniLM" if model_choice == "Hybrid reranker" else model_choice
-    bi_model = load_sentence_transformer(bi_model_choice)
-    cosine_matrix = pair_embedding_matrix(bi_model, left_texts, right_texts)
+    retriever_choice = HYBRID_RETRIEVERS.get(model_choice, model_choice)
+    retrieval_matrix = retriever_pair_matrix(retriever_choice, left_texts, right_texts)
 
-    if model_choice != "Hybrid reranker":
-        matches = greedy_matches(left_sentences, right_sentences, cosine_matrix, threshold)
+    if model_choice not in HYBRID_RETRIEVERS:
+        matches = greedy_matches(left_sentences, right_sentences, retrieval_matrix, threshold)
         return similarity_percent(len(left_texts), len(right_texts), len(matches)), matches
 
-    candidate_pairs = top_candidates_from_matrix(cosine_matrix, top_k_per_left=candidate_top_k)
+    candidate_pairs = top_candidates_from_matrix(retrieval_matrix, top_k_per_left=candidate_top_k)
     matches = cross_encoder_matches(
         left_sentences,
         right_sentences,
         candidate_pairs,
         threshold=threshold,
-        cosine_matrix=cosine_matrix,
+        cosine_matrix=retrieval_matrix,
         alpha=alpha,
     )
     return similarity_percent(len(left_texts), len(right_texts), len(matches)), matches
