@@ -1,0 +1,28 @@
+{
+  "dataset_name": "sentence-transformers/all-nli",
+  "dataset_config": "pair-class",
+  "source_splits": ["train", "dev", "test"],
+  "target_splits": {
+    "train": 0.7,
+    "val": 0.15,
+    "test": 0.15
+  },
+  "seed": 42,
+  "text_columns": ["premise", "hypothesis"],
+  "label_names": {
+    "0": "entailment",
+    "1": "neutral",
+    "2": "contradiction"
+  },
+  "score_mapping": {
+    "entailment": 1.0,
+    "neutral": 0.5,
+    "contradiction": 0.0
+  },
+  "notes": [
+    "Combine all original AllNLI pair-class source splits, then shuffle once and create one shared 70/15/15 train/val/test split.",
+    "All models in fix/ must train and evaluate on this split so model comparison is valid.",
+    "Do not use the old 5000-row local sample for final benchmark tables."
+  ]
+}
+
