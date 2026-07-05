@@ -24,6 +24,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--sftbe-metrics", default="outputs/sftbe_checkpoint/metrics.json")
     parser.add_argument(
+        "--sftbe-cross-metrics",
+        default="outputs/sftbe_cross_encoder/metrics.json",
+    )
+    parser.add_argument(
         "--output",
         default="outputs/tables/final_model_summary.csv",
     )
@@ -141,6 +145,15 @@ def main() -> None:
             "Custom shallow factorized Transformer bi-encoder checkpoint.",
         )
     )
+    sftbe_cross_path = Path(args.sftbe_cross_metrics)
+    if sftbe_cross_path.exists():
+        rows.append(
+            row_from_pair_retrieval(
+                "SFT-BE checkpoint + Cross-Encoder",
+                read_json(sftbe_cross_path),
+                "SFT-BE retrieves/scores pairs, then Cross-Encoder entailment probability is blended with cosine score.",
+            )
+        )
 
     columns = [
         "model",

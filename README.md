@@ -205,12 +205,20 @@ Build the final report summary table:
 python scripts/build_final_model_summary.py
 ```
 
+Build training-process figures and summary tables from existing logs:
+
+```powershell
+python scripts/build_training_process_artifacts.py
+```
+
 Outputs:
 
 ```text
 outputs/sftbe_checkpoint/metrics.json
 outputs/tables/tfidf_preprocessing_ablation.csv
 outputs/tables/final_model_summary.csv
+outputs/tables/training_process_summary.csv
+outputs/figures/training/
 ```
 
 ## Fine-tune MiniLM on Kaggle

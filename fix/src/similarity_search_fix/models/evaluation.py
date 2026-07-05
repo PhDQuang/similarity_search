@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -231,6 +232,33 @@ def evaluate_pair_splits(
 
 
 ScorePairsFn = Callable[[pd.DataFrame], np.ndarray]
+
+
+def evaluate_test_sample_performance(
+    test_frame: pd.DataFrame,
+    score_pairs: ScorePairsFn,
+    threshold: float,
+    sample_size: int,
+    seed: int,
+) -> tuple[pd.DataFrame, np.ndarray, dict[str, Any]]:
+    """Evaluate pair metrics and wall-clock scoring speed on a fixed test sample."""
+    if sample_size > 0 and len(test_frame) > sample_size:
+        sample = test_frame.sample(n=sample_size, random_state=seed).reset_index(drop=True)
+    else:
+        sample = test_frame.reset_index(drop=True)
+
+    start = time.perf_counter()
+    scores = score_pairs(sample)
+    elapsed_seconds = time.perf_counter() - start
+    metrics = binary_pair_metrics(entailment_targets(sample), scores, threshold)
+    runtime = {
+        "sample_rows": int(len(sample)),
+        "elapsed_seconds": float(elapsed_seconds),
+        "pairs_per_second": float(len(sample) / elapsed_seconds) if elapsed_seconds > 0 else 0.0,
+        "threshold": float(threshold),
+        "pair_classification": metrics,
+    }
+    return sample, scores, runtime
 
 
 def evaluate_retrieval_splits(

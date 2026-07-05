@@ -19,6 +19,7 @@ from similarity_search_fix.models.evaluation import (
     entailment_targets,
     evaluate_pair_splits,
     evaluate_retrieval_splits,
+    evaluate_test_sample_performance,
     json_safe,
     load_splits,
     save_json,
@@ -35,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="fix/outputs/minilm_finetuned")
     parser.add_argument("--model-dir", default="fix/models/allnli_70_15_15_minilm")
     parser.add_argument("--base-model", default=DEFAULT_MODEL)
-    parser.add_argument("--num-train-epochs", type=float, default=1.0)
+    parser.add_argument("--num-train-epochs", type=float, default=5.0)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--eval-batch-size", type=int, default=128)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
@@ -46,6 +47,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-steps", type=int, default=1_000)
     parser.add_argument("--save-steps", type=int, default=1_000)
     parser.add_argument("--save-total-limit", type=int, default=2)
+    parser.add_argument("--early-stopping-patience", type=int, default=2)
+    parser.add_argument("--early-stopping-threshold", type=float, default=0.0)
+    parser.add_argument(
+        "--metric-for-best-model",
+        default="eval_fixed-allnli-val_spearman_cosine",
+        help="Metric emitted by EmbeddingSimilarityEvaluator for early stopping.",
+    )
     parser.add_argument(
         "--trainer-eval-samples",
         type=int,
@@ -54,6 +62,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--retrieval-pool-size", type=int, default=20)
     parser.add_argument("--max-retrieval-queries", type=int, default=0)
+    parser.add_argument("--test-sample-size", type=int, default=5_000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--allow-cpu", action="store_true")
     return parser.parse_args()
@@ -123,6 +132,7 @@ def main() -> None:
         SentenceTransformerTrainer,
         SentenceTransformerTrainingArguments,
     )
+    from transformers import EarlyStoppingCallback
 
     try:
         from sentence_transformers.losses import CosineSimilarityLoss
@@ -167,6 +177,9 @@ def main() -> None:
         save_strategy="steps",
         save_steps=args.save_steps,
         save_total_limit=args.save_total_limit,
+        load_best_model_at_end=True,
+        metric_for_best_model=args.metric_for_best_model,
+        greater_is_better=True,
         logging_strategy="steps",
         logging_steps=args.logging_steps,
         report_to="none",
@@ -179,6 +192,12 @@ def main() -> None:
         train_dataset=train_dataset,
         loss=loss,
         evaluator=evaluator,
+        callbacks=[
+            EarlyStoppingCallback(
+                early_stopping_patience=args.early_stopping_patience,
+                early_stopping_threshold=args.early_stopping_threshold,
+            )
+        ],
     )
     train_result = trainer.train()
     model.save_pretrained(str(final_dir))
@@ -200,6 +219,19 @@ def main() -> None:
         max_queries=args.max_retrieval_queries,
         seed=args.seed,
     )
+    test5k_frame, test5k_scores, test5k_report = evaluate_test_sample_performance(
+        frames["test"],
+        score_pairs=lambda sample_frame: embedding_pair_scores(
+            model,
+            sample_frame,
+            args.eval_batch_size,
+            "premise_clean",
+            "hypothesis_clean",
+        ),
+        threshold=threshold,
+        sample_size=args.test_sample_size,
+        seed=args.seed,
+    )
 
     metrics: dict[str, Any] = {
         "task": "entailment-as-semantic-similarity",
@@ -215,6 +247,7 @@ def main() -> None:
         },
         **pair_report,
         "retrieval": retrieval,
+        "test_sample_performance": test5k_report,
     }
     metadata = {
         "base_model": args.base_model,
@@ -230,6 +263,9 @@ def main() -> None:
         "learning_rate": args.learning_rate,
         "warmup_ratio": args.warmup_ratio,
         "max_seq_length": args.max_seq_length,
+        "early_stopping_patience": args.early_stopping_patience,
+        "early_stopping_threshold": args.early_stopping_threshold,
+        "metric_for_best_model": args.metric_for_best_model,
         "fp16": fp16,
         "bf16": bf16,
         "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
@@ -242,6 +278,14 @@ def main() -> None:
     save_json(metadata, output_dir / "training_metadata.json")
     save_pair_predictions(frames["val"], val_scores, threshold, "minilm_cosine", output_dir / "val_predictions.csv")
     save_pair_predictions(frames["test"], test_scores, threshold, "minilm_cosine", output_dir / "test_predictions.csv")
+    save_json(test5k_report, output_dir / "test5k_performance.json")
+    save_pair_predictions(
+        test5k_frame,
+        test5k_scores,
+        threshold,
+        "minilm_cosine",
+        output_dir / "test5k_predictions.csv",
+    )
     binary_confusion(entailment_targets(frames["test"]), test_scores, threshold).to_csv(
         output_dir / "binary_confusion_matrix.csv"
     )

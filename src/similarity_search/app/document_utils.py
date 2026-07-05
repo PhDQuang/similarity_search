@@ -40,6 +40,15 @@ def split_paragraph_into_sentences(
     ]
 
 
+def split_sentences(text: str, page: int | None = None, min_chars: int = 8) -> list[SentenceRecord]:
+    return split_paragraph_into_sentences(
+        normalize_whitespace(text),
+        paragraph=1,
+        page=page,
+        min_chars=min_chars,
+    )
+
+
 def split_text_into_paragraphs(text: str) -> list[str]:
     blocks = [block.strip() for block in PARAGRAPH_BLANK_LINE_RE.split(text)]
     blocks = [block for block in blocks if block]
@@ -131,4 +140,3 @@ def sentence_table(sentences: list[SentenceRecord]) -> list[dict[str, object]]:
         }
         for sentence in sentences
     ]
-

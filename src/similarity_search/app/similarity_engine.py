@@ -37,6 +37,10 @@ HYBRID_RETRIEVERS = {
 }
 
 
+def lowercase_for_model(text: str) -> str:
+    return text.lower()
+
+
 @dataclass(frozen=True)
 class SearchResult:
     sentence_id: int
@@ -231,8 +235,8 @@ def load_cross_encoder_components() -> tuple[Any, Any, str]:
 
 def tfidf_scores(query: str, sentences: list[str]) -> np.ndarray:
     vectorizer = load_tfidf_vectorizer()
-    sentence_vectors = vectorizer.transform(sentences)
-    query_vector = vectorizer.transform([query])
+    sentence_vectors = vectorizer.transform([lowercase_for_model(text) for text in sentences])
+    query_vector = vectorizer.transform([lowercase_for_model(query)])
     return np.asarray(sentence_vectors.dot(query_vector.T).todense()).ravel()
 
 
@@ -255,6 +259,8 @@ def retriever_pair_matrix(model_choice: str, left: list[str], right: list[str]) 
 
 
 def embedding_scores(model: Any, query: str, sentences: list[str], batch_size: int = 64) -> np.ndarray:
+    query = lowercase_for_model(query)
+    sentences = [lowercase_for_model(text) for text in sentences]
     sentence_embeddings = model.encode(
         sentences,
         batch_size=batch_size,
@@ -273,6 +279,8 @@ def embedding_scores(model: Any, query: str, sentences: list[str], batch_size: i
 
 
 def pair_embedding_matrix(model: Any, left: list[str], right: list[str], batch_size: int = 64) -> np.ndarray:
+    left = [lowercase_for_model(text) for text in left]
+    right = [lowercase_for_model(text) for text in right]
     left_embeddings = model.encode(
         left,
         batch_size=batch_size,
@@ -292,8 +300,8 @@ def pair_embedding_matrix(model: Any, left: list[str], right: list[str], batch_s
 
 def tfidf_pair_matrix(left: list[str], right: list[str]) -> np.ndarray:
     vectorizer = load_tfidf_vectorizer()
-    left_vectors = vectorizer.transform(left)
-    right_vectors = vectorizer.transform(right)
+    left_vectors = vectorizer.transform([lowercase_for_model(text) for text in left])
+    right_vectors = vectorizer.transform([lowercase_for_model(text) for text in right])
     return left_vectors.dot(right_vectors.T).toarray()
 
 
@@ -305,7 +313,10 @@ def cross_encoder_predict(pairs: list[tuple[str, str]], batch_size: int = 32) ->
     tokenizer, model, device = load_cross_encoder_components()
     outputs: list[dict[str, float | str]] = []
     for start in range(0, len(pairs), batch_size):
-        batch = pairs[start : start + batch_size]
+        batch = [
+            (lowercase_for_model(left), lowercase_for_model(right))
+            for left, right in pairs[start : start + batch_size]
+        ]
         encoded = tokenizer(
             [item[0] for item in batch],
             [item[1] for item in batch],
@@ -340,16 +351,18 @@ def semantic_search(
     rerank_top_k: int = 30,
     alpha: float = 0.55,
 ) -> list[SearchResult]:
-    texts = [sentence.text for sentence in sentences]
-    if not texts:
+    display_texts = [sentence.text for sentence in sentences]
+    if not display_texts:
         return []
+    texts = [lowercase_for_model(text) for text in display_texts]
+    query_text = lowercase_for_model(query)
 
     if model_choice == "TF-IDF baseline":
-        scores = tfidf_scores(query, texts)
+        scores = tfidf_scores(query_text, texts)
         return ranked_search_results(sentences, scores, threshold, top_k)
 
     if model_choice == "Cross-Encoder NLI":
-        cross_outputs = cross_encoder_predict([(text, query) for text in texts])
+        cross_outputs = cross_encoder_predict([(text, query_text) for text in texts])
         scores = np.asarray([float(item["entailment_probability"]) for item in cross_outputs])
         results = []
         for sentence, score, cross in zip(sentences, scores, cross_outputs):
@@ -369,7 +382,7 @@ def semantic_search(
         return sorted(results, key=lambda item: item.score, reverse=True)[:top_k]
 
     retriever_choice = HYBRID_RETRIEVERS.get(model_choice, model_choice)
-    retriever_candidate_scores = retriever_scores(retriever_choice, query, texts)
+    retriever_candidate_scores = retriever_scores(retriever_choice, query_text, texts)
 
     if model_choice not in HYBRID_RETRIEVERS:
         return ranked_search_results(
@@ -382,7 +395,7 @@ def semantic_search(
 
     candidate_count = min(max(top_k, rerank_top_k), len(sentences))
     candidate_indices = np.argsort(-retriever_candidate_scores)[:candidate_count]
-    pairs = [(sentences[index].text, query) for index in candidate_indices]
+    pairs = [(texts[int(index)], query_text) for index in candidate_indices]
     cross_outputs = cross_encoder_predict(pairs)
 
     results: list[SearchResult] = []
@@ -444,10 +457,12 @@ def compare_documents(
     candidate_top_k: int = 5,
     alpha: float = 0.55,
 ) -> tuple[float, list[MatchResult]]:
-    left_texts = [sentence.text for sentence in left_sentences]
-    right_texts = [sentence.text for sentence in right_sentences]
-    if not left_texts or not right_texts:
+    display_left_texts = [sentence.text for sentence in left_sentences]
+    display_right_texts = [sentence.text for sentence in right_sentences]
+    if not display_left_texts or not display_right_texts:
         return 0.0, []
+    left_texts = [lowercase_for_model(text) for text in display_left_texts]
+    right_texts = [lowercase_for_model(text) for text in display_right_texts]
 
     if model_choice == "TF-IDF baseline":
         matrix = tfidf_pair_matrix(left_texts, right_texts)
@@ -539,7 +554,13 @@ def cross_encoder_matches(
     cosine_matrix: np.ndarray | None = None,
     alpha: float = 0.55,
 ) -> list[MatchResult]:
-    pairs = [(left_sentences[i].text, right_sentences[j].text) for i, j in candidate_pairs]
+    pairs = [
+        (
+            lowercase_for_model(left_sentences[i].text),
+            lowercase_for_model(right_sentences[j].text),
+        )
+        for i, j in candidate_pairs
+    ]
     cross_outputs = cross_encoder_predict(pairs)
     candidates: list[tuple[int, int, float, dict[str, float | str], float | None]] = []
     for (left_index, right_index), cross in zip(candidate_pairs, cross_outputs):

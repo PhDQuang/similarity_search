@@ -973,14 +973,21 @@ def benchmark_tab() -> None:
             st.markdown("**TF-IDF Preprocessing Ablation**")
             st.dataframe(pd.read_csv(ablation_path), use_container_width=True, hide_index=True)
 
+        training_summary_path = OUTPUTS_DIR / "tables" / "training_process_summary.csv"
+        if training_summary_path.exists():
+            st.markdown("**Training Process Summary**")
+            st.dataframe(pd.read_csv(training_summary_path), use_container_width=True, hide_index=True)
+
         comparison_path = OUTPUTS_DIR / "finetuned_minilm" / "model_comparison.csv"
         fallback_comparison_path = OUTPUTS_DIR / "tables" / "model_comparison.csv"
         if comparison_path.exists():
             st.markdown("**MiniLM Comparison**")
-            st.dataframe(pd.read_csv(comparison_path), use_container_width=True, hide_index=True)
+            comparison = pd.read_csv(comparison_path)
+            st.dataframe(comparison, use_container_width=True, hide_index=True)
         elif fallback_comparison_path.exists():
             st.markdown("**Baseline Comparison**")
-            st.dataframe(pd.read_csv(fallback_comparison_path), use_container_width=True, hide_index=True)
+            comparison = pd.read_csv(fallback_comparison_path)
+            st.dataframe(comparison, use_container_width=True, hide_index=True)
 
         confusion_path = OUTPUTS_DIR / "cross_encoder_outputs" / "cross_encoder_confusion_matrix.csv"
         if confusion_path.exists():
@@ -997,7 +1004,9 @@ def benchmark_tab() -> None:
         if loss_summary:
             st.markdown("**SFT-BE Training Progress (Stage 0 distillation)**")
             points = pd.DataFrame(loss_summary["points"]).sort_values("global_step")
-            chart_frame = points.set_index("global_step")[["interval_loss_reconstructed", "interval_cosine_approx"]]
+            chart_frame = points.set_index("global_step")[
+                ["interval_loss_reconstructed", "interval_cosine_approx"]
+            ]
             chart_frame.columns = ["Loss", "Cosine similarity to teacher"]
             st.line_chart(chart_frame)
             col_a, col_b = st.columns(2)

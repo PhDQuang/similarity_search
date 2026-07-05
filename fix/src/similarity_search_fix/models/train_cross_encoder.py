@@ -17,6 +17,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
     DataCollatorWithPadding,
+    EarlyStoppingCallback,
     Trainer,
     TrainingArguments,
     set_seed,
@@ -31,6 +32,7 @@ from similarity_search_fix.models.evaluation import (
     entailment_targets,
     evaluate_pair_splits,
     evaluate_retrieval_splits,
+    evaluate_test_sample_performance,
     json_safe,
     load_splits,
     save_json,
@@ -45,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="fix/outputs/cross_encoder")
     parser.add_argument("--model-dir", default="fix/models/allnli_70_15_15_cross_encoder")
     parser.add_argument("--base-model", default="distilbert-base-uncased")
-    parser.add_argument("--num-train-epochs", type=float, default=1.0)
+    parser.add_argument("--num-train-epochs", type=float, default=5.0)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--eval-batch-size", type=int, default=64)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
@@ -57,6 +59,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-steps", type=int, default=1_000)
     parser.add_argument("--save-steps", type=int, default=1_000)
     parser.add_argument("--save-total-limit", type=int, default=2)
+    parser.add_argument("--early-stopping-patience", type=int, default=2)
+    parser.add_argument("--early-stopping-threshold", type=float, default=0.0)
     parser.add_argument(
         "--trainer-eval-samples",
         type=int,
@@ -65,6 +69,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--retrieval-pool-size", type=int, default=20)
     parser.add_argument("--max-retrieval-queries", type=int, default=0)
+    parser.add_argument("--test-sample-size", type=int, default=5_000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--allow-cpu", action="store_true")
     return parser.parse_args()
@@ -75,6 +80,16 @@ def make_training_args(**kwargs: Any) -> TrainingArguments:
     if "eval_strategy" in signature.parameters and "evaluation_strategy" in kwargs:
         kwargs["eval_strategy"] = kwargs.pop("evaluation_strategy")
     return TrainingArguments(**kwargs)
+
+
+def trainer_tokenizer_kwargs(tokenizer: Any) -> dict[str, Any]:
+    """Support both old Trainer(tokenizer=...) and new Trainer(processing_class=...)."""
+    signature = inspect.signature(Trainer.__init__)
+    if "processing_class" in signature.parameters:
+        return {"processing_class": tokenizer}
+    if "tokenizer" in signature.parameters:
+        return {"tokenizer": tokenizer}
+    return {}
 
 
 def to_dataset(frame: pd.DataFrame) -> Dataset:
@@ -220,9 +235,15 @@ def main() -> None:
         args=training_args,
         train_dataset=tokenized_train,
         eval_dataset=tokenized_val_eval,
-        tokenizer=tokenizer,
         data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
         compute_metrics=compute_metrics,
+        callbacks=[
+            EarlyStoppingCallback(
+                early_stopping_patience=args.early_stopping_patience,
+                early_stopping_threshold=args.early_stopping_threshold,
+            )
+        ],
+        **trainer_tokenizer_kwargs(tokenizer),
     )
     train_result = trainer.train()
     trainer.save_model(str(final_dir))
@@ -250,6 +271,20 @@ def main() -> None:
         ),
         pool_size=args.retrieval_pool_size,
         max_queries=args.max_retrieval_queries,
+        seed=args.seed,
+    )
+    test5k_frame, test5k_scores, test5k_report = evaluate_test_sample_performance(
+        frames["test"],
+        score_pairs=lambda sample_frame: cross_encoder_scores(
+            model,
+            tokenizer,
+            str(training_args.device),
+            sample_frame,
+            args.eval_batch_size,
+            args.max_length,
+        ),
+        threshold=threshold,
+        sample_size=args.test_sample_size,
         seed=args.seed,
     )
 
@@ -285,6 +320,7 @@ def main() -> None:
         },
         **pair_report,
         "retrieval": retrieval,
+        "test_sample_performance": test5k_report,
     }
     metadata = {
         "base_model": args.base_model,
@@ -301,6 +337,8 @@ def main() -> None:
         "warmup_ratio": args.warmup_ratio,
         "weight_decay": args.weight_decay,
         "max_length": args.max_length,
+        "early_stopping_patience": args.early_stopping_patience,
+        "early_stopping_threshold": args.early_stopping_threshold,
         "fp16": fp16,
         "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
         "train_result": json_safe(getattr(train_result, "metrics", {})),
@@ -311,6 +349,14 @@ def main() -> None:
     save_json(metadata, output_dir / "training_metadata.json")
     save_pair_predictions(frames["val"], val_scores, threshold, "entailment_probability", output_dir / "val_predictions.csv")
     save_pair_predictions(frames["test"], test_scores, threshold, "entailment_probability", output_dir / "test_predictions.csv")
+    save_json(test5k_report, output_dir / "test5k_performance.json")
+    save_pair_predictions(
+        test5k_frame,
+        test5k_scores,
+        threshold,
+        "entailment_probability",
+        output_dir / "test5k_predictions.csv",
+    )
     binary_confusion(entailment_targets(frames["test"]), test_scores, threshold).to_csv(
         output_dir / "binary_confusion_matrix.csv"
     )

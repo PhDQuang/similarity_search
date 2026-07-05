@@ -18,9 +18,10 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 
-# Local data and outputs
+# Local data, model artifacts, and outputs
 data/raw/*
 data/processed/*
+data/processed2/*
 outputs/*
 models/*
 checkpoints/*
@@ -31,6 +32,22 @@ checkpoints/*
 !outputs/tables/.gitkeep
 !outputs/reports/.gitkeep
 !models/.gitkeep
+
+# Fixed benchmark generated artifacts
+fix/data/*
+fix/outputs/*
+fix/models/*
+fix/checkpoints/*
+
+# Large/generated ML artifacts
+*.parquet
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.joblib
+*.zip
 
 # OS / IDE
 .DS_Store

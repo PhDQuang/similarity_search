@@ -17,6 +17,7 @@ from similarity_search_fix.models.evaluation import (
     entailment_targets,
     evaluate_pair_splits,
     evaluate_retrieval_splits,
+    evaluate_test_sample_performance,
     load_splits,
     save_json,
     save_pair_predictions,
@@ -33,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-df", type=int, default=2)
     parser.add_argument("--ngram-max", type=int, default=2, choices=(1, 2, 3))
     parser.add_argument("--retrieval-pool-size", type=int, default=20)
+    parser.add_argument("--test-sample-size", type=int, default=5_000)
     parser.add_argument(
         "--max-retrieval-queries",
         type=int,
@@ -102,6 +104,13 @@ def main() -> None:
         max_queries=args.max_retrieval_queries,
         seed=args.seed,
     )
+    test5k_frame, test5k_scores, test5k_report = evaluate_test_sample_performance(
+        frames["test"],
+        score_pairs=lambda sample_frame: pair_scores(vectorizer, sample_frame),
+        threshold=threshold,
+        sample_size=args.test_sample_size,
+        seed=args.seed,
+    )
 
     metrics: dict[str, Any] = {
         "task": "entailment-as-semantic-similarity",
@@ -119,6 +128,7 @@ def main() -> None:
         },
         **pair_report,
         "retrieval": retrieval,
+        "test_sample_performance": test5k_report,
     }
 
     joblib.dump(vectorizer, model_dir / "vectorizer.joblib")
@@ -126,6 +136,14 @@ def main() -> None:
     save_json(metrics, output_dir / "metrics.json")
     save_pair_predictions(frames["val"], val_scores, threshold, "tfidf_cosine", output_dir / "val_predictions.csv")
     save_pair_predictions(frames["test"], test_scores, threshold, "tfidf_cosine", output_dir / "test_predictions.csv")
+    save_json(test5k_report, output_dir / "test5k_performance.json")
+    save_pair_predictions(
+        test5k_frame,
+        test5k_scores,
+        threshold,
+        "tfidf_cosine",
+        output_dir / "test5k_predictions.csv",
+    )
     binary_confusion(entailment_targets(frames["test"]), test_scores, threshold).to_csv(
         output_dir / "binary_confusion_matrix.csv"
     )
