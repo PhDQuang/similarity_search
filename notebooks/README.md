@@ -1,38 +1,29 @@
-# Notebooks
+# Kaggle notebooks for clean full AllNLI training
 
-Recommended notebooks:
+Moi notebook co the chay doc lap tren Kaggle:
 
-```text
-01_eda_allnli.ipynb
-02_baseline_tfidf.ipynb
-03_train_sentence_transformer.ipynb
-03_train_biencoder_kaggle.ipynb
-03_train_biencoder_allnli_pair_500k_kaggle.ipynb
-04_train_minilm_pair_score_500k_kaggle.ipynb
-04_train_cross_encoder.ipynb
-05_document_similarity_evaluation.ipynb
-```
+1. `01_train_tfidf_clean_full_eval5k_kaggle.ipynb`
+2. `02_train_minilm_clean_full_earlystop_eval5k_kaggle.ipynb`
+3. `03_train_cross_encoder_clean_full_earlystop_eval5k_kaggle.ipynb`
+4. `04_train_sftbe_clean_full_earlystop_eval5k_kaggle.ipynb`
 
-Keep notebooks readable:
+Moi notebook tu:
 
-- Put reusable logic in `src/`.
-- Use notebooks for experiments, figures, and explanation.
-- Save final metrics and figures to `outputs/`.
+- clone repo vao `/kaggle/working/similarity_search` neu chua co;
+- cai `requirements-kaggle.txt` va package chinh;
+- tim clean dataset da upload trong `/kaggle/input/allnli-70-15-15-clean/...`;
+- neu khong co clean dataset upload san, tu tao lai clean dataset bang
+  `similarity_search.data.prepare_allnli_70_15_15_clean`;
+- train model tren clean train split day du;
+- dung early stopping voi MiniLM, Cross-Encoder, SFT-BE;
+- danh gia pair classification tren test sample 5k va do thoi gian scoring;
+- nen model + outputs thanh file zip trong `/kaggle/working` de tai ve.
 
-`03_train_biencoder_kaggle.ipynb` is a self-contained Kaggle notebook. It
-loads `phdquang/allnli-pair-class-processed` directly from Hugging Face,
-trains on entailment pairs, evaluates all three models, and exports ZIP files.
+TF-IDF la baseline non-iterative nen khong co early stopping.
 
-Use `03_train_biencoder_allnli_pair_500k_kaggle.ipynb` for the main fine-tuning
-experiment. It trains on `sentence-transformers/all-nli` subset `pair` with up
-to 500,000 pairs, then evaluates on `phdquang/allnli-pair-class-processed`.
+SFT-BE can upload checkpoint `stage0_final.pt` vao Kaggle Dataset. Notebook se
+tu tim trong `/kaggle/input/**/stage0_final.pt` va `/kaggle/input/**/stage0*.pt`.
+Neu checkpoint co ten/duong dan khac, sua bien `SFTBE_CHECKPOINT_CANDIDATES`.
 
-If the target metric is pair similarity F1/ROC-AUC, prefer
-`04_train_minilm_pair_score_500k_kaggle.ipynb`. It trains on AllNLI
-`pair-score` with `CosineSimilarityLoss`, which is better aligned with the
-threshold-based benchmark.
 
-Use `05-train-cross-encoder-nli-kaggle.ipynb` for the Cross-Encoder NLI
-reranker. It trains a 3-class NLI model on AllNLI `pair-class`, selects an
-entailment threshold for semantic similarity, and evaluates reranking metrics
-for the web search pipeline.
+

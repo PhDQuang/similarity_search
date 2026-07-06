@@ -1,4 +1,4 @@
-"""Build final comparison tables and a barem artifact manifest for fix/ outputs."""
+"""Build final comparison tables and a barem artifact manifest."""
 
 from __future__ import annotations
 
@@ -9,21 +9,28 @@ from typing import Any
 
 import pandas as pd
 
-from similarity_search_fix.models.evaluation import save_json
+from similarity_search.models.evaluation import save_json
 
 
 MODEL_OUTPUTS = {
     "TF-IDF": "tfidf_baseline",
-    "Fine-tuned MiniLM": "minilm_finetuned",
-    "Cross-Encoder NLI": "cross_encoder",
-    "SFT-BE AllNLI": "sftbe_allnli",
+    "Fine-tuned MiniLM": "finetuned_minilm",
+    "Cross-Encoder NLI": "cross_encoder_outputs",
+    "SFT-BE AllNLI": "sftbe_checkpoint",
+}
+
+MODEL_ARTIFACTS = {
+    "TF-IDF": "models/tfidf_baseline",
+    "Fine-tuned MiniLM": "models/allnli-minilm-biencoder/final",
+    "Cross-Encoder NLI": "models/allnli-cross-encoder-nli/final",
+    "SFT-BE AllNLI": "models/sftbe_checkpoint/stage1_allnli_final.pt",
 }
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--outputs-dir", default="fix/outputs")
-    parser.add_argument("--output-table-dir", default="fix/outputs/tables")
+    parser.add_argument("--outputs-dir", default="outputs")
+    parser.add_argument("--output-table-dir", default="outputs/tables")
     return parser.parse_args()
 
 
@@ -83,24 +90,21 @@ def training_row(name: str, output_dir: Path) -> dict[str, Any] | None:
         "learning_rate": metadata.get("learning_rate"),
         "warmup_ratio": metadata.get("warmup_ratio"),
         "gpu_or_device": metadata.get("gpu", metadata.get("device", "")),
-        "artifact": metadata.get("final_model_dir", metadata.get("final_checkpoint", "")),
+        "artifact": MODEL_ARTIFACTS.get(name, metadata.get("final_model_dir", metadata.get("final_checkpoint", ""))),
     }
 
 
 def manifest(outputs_dir: Path) -> dict[str, Any]:
     return {
         "dataset": {
-            "metadata": "fix/data/processed/allnli_70_15_15/pair-class/metadata.json",
-            "row_counts": str(outputs_dir / "tables/allnli_70_15_15/pair-class/row_counts.csv"),
-            "label_distribution": str(outputs_dir / "tables/allnli_70_15_15/pair-class/label_distribution.csv"),
-            "numeric_stats": str(outputs_dir / "tables/allnli_70_15_15/pair-class/numeric_descriptive_stats.csv"),
-            "examples": str(outputs_dir / "tables/allnli_70_15_15/pair-class/examples_by_label.csv"),
+            "metadata": "data/processed/allnli_70_15_15_clean/pair-class/metadata.json",
+            "row_counts": str(outputs_dir / "tables/dataset_quality/allnli_70_15_15/pair-class/row_counts.csv"),
+            "label_distribution": str(outputs_dir / "tables/dataset_quality/allnli_70_15_15/pair-class/label_distribution.csv"),
+            "numeric_stats": str(outputs_dir / "tables/dataset_quality/allnli_70_15_15/pair-class/clean_validation_summary.csv"),
+            "examples": str(outputs_dir / "tables/dataset_quality/allnli_70_15_15/pair-class/duplicate_examples_fix_clean.csv"),
             "figures": [
-                str(outputs_dir / "figures/allnli_70_15_15/pair-class/rows_by_split.png"),
-                str(outputs_dir / "figures/allnli_70_15_15/pair-class/label_distribution.png"),
-                str(outputs_dir / "figures/allnli_70_15_15/pair-class/token_length_histogram.png"),
-                str(outputs_dir / "figures/allnli_70_15_15/pair-class/lexical_overlap_by_label.png"),
-                str(outputs_dir / "figures/allnli_70_15_15/pair-class/top_words.png"),
+                str(outputs_dir / "figures/dataset_quality/allnli_70_15_15/pair-class/label_distribution.png"),
+                str(outputs_dir / "figures/dataset_quality/allnli_70_15_15/pair-class/token_length_distribution.png"),
             ],
         },
         "models": {
@@ -146,4 +150,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
 

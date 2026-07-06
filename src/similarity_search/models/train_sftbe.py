@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from transformers import get_cosine_schedule_with_warmup
 
-from similarity_search_fix.models.evaluation import (
+from similarity_search.models.evaluation import (
     POSITIVE_LABEL,
     SCORE_BY_LABEL,
     binary_confusion,
@@ -35,9 +35,9 @@ from similarity_search_fix.models.evaluation import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input-dir", default="fix/data/processed/allnli_70_15_15/pair-class")
-    parser.add_argument("--output-dir", default="fix/outputs/sftbe_allnli")
-    parser.add_argument("--model-dir", default="fix/models/sftbe_allnli_70_15_15")
+    parser.add_argument("--input-dir", default="data/processed/allnli_70_15_15_clean/pair-class")
+    parser.add_argument("--output-dir", default="outputs/sftbe_checkpoint")
+    parser.add_argument("--model-dir", default="models/sftbe_checkpoint")
     parser.add_argument("--checkpoint-path", default="models/sftbe_checkpoint/stage0_final.pt")
     parser.add_argument("--num-train-epochs", type=float, default=5.0)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -93,16 +93,37 @@ class PairScoreDataset(Dataset):
         }
 
 
+def resolve_checkpoint_path(checkpoint_path: Path) -> Path:
+    if checkpoint_path.exists():
+        return checkpoint_path
+
+    kaggle_input = Path("/kaggle/input")
+    candidates: list[Path] = []
+    if kaggle_input.exists():
+        candidates.extend(sorted(kaggle_input.glob("**/stage0_final.pt")))
+        candidates.extend(sorted(kaggle_input.glob("**/stage0*.pt")))
+        candidates.extend(sorted(kaggle_input.glob("**/sftbe*.pt")))
+
+    for candidate in candidates:
+        if candidate.exists():
+            print(f"Resolved SFT-BE checkpoint from Kaggle input: {candidate}")
+            return candidate
+
+    found_pt_files = [str(path) for path in sorted(kaggle_input.glob("**/*.pt"))[:30]] if kaggle_input.exists() else []
+    raise FileNotFoundError(
+        f"SFT-BE checkpoint not found: {checkpoint_path}. "
+        "Upload stage0_final.pt to a Kaggle Dataset and attach it to this notebook. "
+        "The script searches /kaggle/input/**/stage0_final.pt, /kaggle/input/**/stage0*.pt, "
+        f"and /kaggle/input/**/sftbe*.pt. Found .pt files: {found_pt_files}"
+    )
+
+
 def load_current_sftbe(checkpoint_path: Path, device: torch.device) -> tuple[Any, Any, dict[str, Any]]:
     from similarity_search.sftbe.config import DATA_CONFIG, MODEL_CONFIG
     from similarity_search.sftbe.dataset import get_tokenizer
     from similarity_search.sftbe.model import create_sftbe_model
 
-    if not checkpoint_path.exists():
-        raise FileNotFoundError(
-            f"SFT-BE checkpoint not found: {checkpoint_path}. "
-            "On Kaggle, pass --checkpoint-path to the uploaded stage0_final.pt file."
-        )
+    checkpoint_path = resolve_checkpoint_path(checkpoint_path)
     tokenizer = get_tokenizer(DATA_CONFIG["tokenizer_name"])
     model = create_sftbe_model(MODEL_CONFIG).to(device)
     state = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -417,3 +438,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

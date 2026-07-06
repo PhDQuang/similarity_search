@@ -1,56 +1,53 @@
-"""Train a Cross-Encoder NLI reranker for semantic similarity search."""
+"""Fine-tune a Cross-Encoder NLI model on the fixed AllNLI 70/15/15 split."""
 
 from __future__ import annotations
 
 import argparse
 import inspect
 import json
-import os
-import random
-import shutil
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import torch
-from datasets import Dataset, DatasetDict, load_dataset
-from sklearn.metrics import (
-    accuracy_score,
-    average_precision_score,
-    classification_report,
-    confusion_matrix,
-    f1_score,
-    precision_recall_curve,
-    precision_recall_fscore_support,
-    roc_auc_score,
-)
+from datasets import Dataset, DatasetDict
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
     DataCollatorWithPadding,
+    EarlyStoppingCallback,
     Trainer,
     TrainingArguments,
     set_seed,
 )
 
-LABEL2ID = {"entailment": 0, "neutral": 1, "contradiction": 2}
-ID2LABEL = {value: key for key, value in LABEL2ID.items()}
+from similarity_search.models.evaluation import (
+    ID2LABEL,
+    LABEL2ID,
+    POSITIVE_LABEL,
+    binary_confusion,
+    binary_pair_metrics,
+    entailment_targets,
+    evaluate_pair_splits,
+    evaluate_retrieval_splits,
+    evaluate_test_sample_performance,
+    json_safe,
+    load_splits,
+    save_json,
+    save_pair_predictions,
+    validate_pair_class_frame,
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--train-dataset-name", default="sentence-transformers/all-nli")
-    parser.add_argument("--train-dataset-config", default="pair-class")
-    parser.add_argument("--benchmark-dataset-name", default="phdquang/allnli-pair-class-processed")
-    parser.add_argument("--skip-benchmark", action="store_true")
+    parser.add_argument("--input-dir", default="data/processed/allnli_70_15_15_clean/pair-class")
+    parser.add_argument("--output-dir", default="outputs/cross_encoder_outputs")
+    parser.add_argument("--model-dir", default="models/allnli-cross-encoder-nli")
     parser.add_argument("--base-model", default="distilbert-base-uncased")
-    parser.add_argument("--output-dir", default="/kaggle/working/allnli-cross-encoder-nli")
-    parser.add_argument("--result-dir", default="/kaggle/working/cross_encoder_outputs")
-    parser.add_argument("--max-train-samples", type=int, default=300_000)
-    parser.add_argument("--max-dev-samples", type=int, default=20_000)
-    parser.add_argument("--max-test-samples", type=int, default=20_000)
-    parser.add_argument("--num-train-epochs", type=float, default=1.0)
+    parser.add_argument("--num-train-epochs", type=float, default=5.0)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--eval-batch-size", type=int, default=64)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
@@ -59,86 +56,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--max-length", type=int, default=128)
     parser.add_argument("--logging-steps", type=int, default=100)
-    parser.add_argument("--eval-steps", type=int, default=1000)
-    parser.add_argument("--save-steps", type=int, default=1000)
+    parser.add_argument("--eval-steps", type=int, default=1_000)
+    parser.add_argument("--save-steps", type=int, default=1_000)
     parser.add_argument("--save-total-limit", type=int, default=2)
-    parser.add_argument("--rerank-queries", type=int, default=1000)
-    parser.add_argument("--rerank-pool-size", type=int, default=20)
+    parser.add_argument("--early-stopping-patience", type=int, default=2)
+    parser.add_argument("--early-stopping-threshold", type=float, default=0.0)
+    parser.add_argument(
+        "--trainer-eval-samples",
+        type=int,
+        default=20_000,
+        help="Rows for evaluation during training. Final val/test metrics use full splits. 0 means full val.",
+    )
+    parser.add_argument("--retrieval-pool-size", type=int, default=20)
+    parser.add_argument("--max-retrieval-queries", type=int, default=0)
+    parser.add_argument("--test-sample-size", type=int, default=5_000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--allow-cpu", action="store_true")
-    parser.add_argument("--push-to-hub", action="store_true")
-    parser.add_argument("--hub-model-id", default=None)
-    parser.add_argument("--hub-private-repo", action="store_true")
     return parser.parse_args()
-
-
-def json_safe(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(key): json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [json_safe(item) for item in value]
-    if hasattr(value, "item"):
-        return value.item()
-    return value
-
-
-def load_pair_class_dataset(dataset_name: str, dataset_config: str | None) -> DatasetDict:
-    if dataset_config:
-        return load_dataset(dataset_name, dataset_config)
-    return load_dataset(dataset_name)
-
-
-def get_split(dataset: DatasetDict, names: tuple[str, ...]) -> Dataset:
-    for name in names:
-        if name in dataset:
-            return dataset[name]
-    raise KeyError(f"Missing split. Tried {names}. Available: {list(dataset.keys())}")
-
-
-def label_to_id(value: Any) -> int:
-    if isinstance(value, str):
-        value = value.strip().lower()
-        if value in LABEL2ID:
-            return LABEL2ID[value]
-        if value.isdigit():
-            return int(value)
-    return int(value)
-
-
-def choose_text_columns(dataset: Dataset) -> tuple[str, str]:
-    columns = set(dataset.column_names)
-    if {"premise_clean", "hypothesis_clean"}.issubset(columns):
-        return "premise_clean", "hypothesis_clean"
-    if {"premise", "hypothesis"}.issubset(columns):
-        return "premise", "hypothesis"
-    if {"sentence1", "sentence2"}.issubset(columns):
-        return "sentence1", "sentence2"
-    raise ValueError(f"Cannot infer text columns from: {dataset.column_names}")
-
-
-def normalize_dataset(dataset: Dataset, text_a_col: str, text_b_col: str) -> Dataset:
-    label_source = "label" if "label" in dataset.column_names else "label_name"
-
-    def mapper(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
-        return {
-            "text_a": [str(value).strip() for value in batch[text_a_col]],
-            "text_b": [str(value).strip() for value in batch[text_b_col]],
-            "labels": [label_to_id(value) for value in batch[label_source]],
-        }
-
-    return dataset.map(mapper, batched=True, remove_columns=dataset.column_names)
-
-
-def sample_dataset(dataset: Dataset, max_samples: int, seed: int) -> Dataset:
-    if max_samples <= 0 or len(dataset) <= max_samples:
-        return dataset
-    return dataset.shuffle(seed=seed).select(range(max_samples))
-
-
-def softmax_np(logits: np.ndarray) -> np.ndarray:
-    logits = logits - logits.max(axis=-1, keepdims=True)
-    exp = np.exp(logits)
-    return exp / exp.sum(axis=-1, keepdims=True)
 
 
 def make_training_args(**kwargs: Any) -> TrainingArguments:
@@ -148,229 +82,117 @@ def make_training_args(**kwargs: Any) -> TrainingArguments:
     return TrainingArguments(**kwargs)
 
 
-def choose_threshold(y_true: np.ndarray, scores: np.ndarray) -> tuple[float, float]:
-    precision, recall, thresholds = precision_recall_curve(y_true, scores)
-    if len(thresholds) == 0:
-        return 0.5, 0.0
-    f1 = 2 * precision[:-1] * recall[:-1] / np.maximum(
-        precision[:-1] + recall[:-1],
-        1e-12,
-    )
-    best_index = int(np.argmax(f1))
-    return float(thresholds[best_index]), float(f1[best_index])
+def trainer_tokenizer_kwargs(tokenizer: Any) -> dict[str, Any]:
+    """Support both old Trainer(tokenizer=...) and new Trainer(processing_class=...)."""
+    signature = inspect.signature(Trainer.__init__)
+    if "processing_class" in signature.parameters:
+        return {"processing_class": tokenizer}
+    if "tokenizer" in signature.parameters:
+        return {"tokenizer": tokenizer}
+    return {}
 
 
-def binary_similarity_metrics(
-    labels: np.ndarray,
-    entailment_probs: np.ndarray,
-    threshold: float,
-) -> dict[str, float]:
-    y_true = labels == LABEL2ID["entailment"]
-    y_pred = entailment_probs >= threshold
-    precision, recall, f1, _ = precision_recall_fscore_support(
-        y_true,
-        y_pred,
-        average="binary",
-        zero_division=0,
-    )
-    return {
-        "threshold": float(threshold),
-        "accuracy": float(accuracy_score(y_true, y_pred)),
-        "precision": float(precision),
-        "recall": float(recall),
-        "f1": float(f1),
-        "roc_auc": float(roc_auc_score(y_true, entailment_probs)),
-        "average_precision": float(average_precision_score(y_true, entailment_probs)),
-        "mean_positive_score": float(entailment_probs[y_true].mean()),
-        "mean_negative_score": float(entailment_probs[~y_true].mean()),
-    }
-
-
-def build_dataset(args: argparse.Namespace) -> DatasetDict:
-    raw = load_pair_class_dataset(args.train_dataset_name, args.train_dataset_config or None)
-    train_raw = get_split(raw, ("train",))
-    dev_raw = get_split(raw, ("dev", "validation"))
-    test_raw = get_split(raw, ("test",))
-
-    text_a_col, text_b_col = choose_text_columns(train_raw)
-    train = normalize_dataset(train_raw, text_a_col, text_b_col)
-    dev = normalize_dataset(dev_raw, text_a_col, text_b_col)
-    test = normalize_dataset(test_raw, text_a_col, text_b_col)
-
-    return DatasetDict(
+def to_dataset(frame: pd.DataFrame) -> Dataset:
+    data = pd.DataFrame(
         {
-            "train": sample_dataset(train, args.max_train_samples, args.seed),
-            "dev": sample_dataset(dev, args.max_dev_samples, args.seed),
-            "test": sample_dataset(test, args.max_test_samples, args.seed),
+            "text_a": frame["premise_clean"].astype(str),
+            "text_b": frame["hypothesis_clean"].astype(str),
+            "labels": frame["label_name"].map(LABEL2ID).astype(int),
         }
     )
+    return Dataset.from_pandas(data, preserve_index=False)
 
 
-def tokenize_dataset(dataset: DatasetDict, tokenizer: Any, max_length: int) -> DatasetDict:
+def sample_dataset(dataset: Dataset, max_samples: int, seed: int) -> Dataset:
+    if max_samples <= 0 or len(dataset) <= max_samples:
+        return dataset
+    return dataset.shuffle(seed=seed).select(range(max_samples))
+
+
+def tokenize_dataset(dataset: Dataset | DatasetDict, tokenizer: Any, max_length: int) -> Dataset | DatasetDict:
     def tokenize_batch(batch: dict[str, list[str]]) -> dict[str, Any]:
-        return tokenizer(
-            batch["text_a"],
-            batch["text_b"],
-            truncation=True,
-            max_length=max_length,
-        )
+        return tokenizer(batch["text_a"], batch["text_b"], truncation=True, max_length=max_length)
 
-    return dataset.map(
-        tokenize_batch,
-        batched=True,
-        remove_columns=["text_a", "text_b"],
-    )
+    return dataset.map(tokenize_batch, batched=True, remove_columns=["text_a", "text_b"])
 
 
-def predict_entailment_probabilities(
-    trainer: Trainer,
+def softmax_np(logits: np.ndarray) -> np.ndarray:
+    shifted = logits - logits.max(axis=-1, keepdims=True)
+    exp = np.exp(shifted)
+    return exp / exp.sum(axis=-1, keepdims=True)
+
+
+def nli_metrics(labels: np.ndarray, logits: np.ndarray, prefix: str) -> dict[str, float]:
+    probs = softmax_np(logits)
+    preds = probs.argmax(axis=-1)
+    return {
+        f"{prefix}_accuracy": float(accuracy_score(labels, preds)),
+        f"{prefix}_macro_f1": float(f1_score(labels, preds, average="macro")),
+        f"{prefix}_entailment_f1": float(
+            f1_score(labels == LABEL2ID["entailment"], preds == LABEL2ID["entailment"])
+        ),
+    }
+
+
+def cross_encoder_scores(
+    model: Any,
     tokenizer: Any,
+    device: str,
     frame: pd.DataFrame,
+    batch_size: int,
     max_length: int,
 ) -> np.ndarray:
-    pair_dataset = Dataset.from_pandas(frame[["text_a", "text_b"]], preserve_index=False)
-
-    def tokenize_batch(batch: dict[str, list[str]]) -> dict[str, Any]:
-        return tokenizer(
-            batch["text_a"],
-            batch["text_b"],
+    scores: list[np.ndarray] = []
+    left = frame["text_a" if "text_a" in frame.columns else "premise_clean"].astype(str).tolist()
+    right = frame["text_b" if "text_b" in frame.columns else "hypothesis_clean"].astype(str).tolist()
+    for start in range(0, len(frame), batch_size):
+        end = start + batch_size
+        encoded = tokenizer(
+            left[start:end],
+            right[start:end],
             truncation=True,
+            padding=True,
             max_length=max_length,
+            return_tensors="pt",
         )
-
-    pair_dataset = pair_dataset.map(
-        tokenize_batch,
-        batched=True,
-        remove_columns=["text_a", "text_b"],
-    )
-    predictions = trainer.predict(pair_dataset)
-    probs = softmax_np(predictions.predictions)
-    return probs[:, LABEL2ID["entailment"]]
-
-
-def rerank_retrieval_metrics(
-    trainer: Trainer,
-    tokenizer: Any,
-    frame: pd.DataFrame,
-    max_length: int,
-    max_queries: int,
-    pool_size: int,
-    seed: int,
-) -> tuple[dict[str, float | int], pd.DataFrame]:
-    rng = np.random.default_rng(seed)
-    positives = frame[frame["labels"] == LABEL2ID["entailment"]].reset_index(drop=True)
-    negatives = frame[frame["labels"] != LABEL2ID["entailment"]].reset_index(drop=True)
-    if positives.empty or negatives.empty:
-        raise ValueError("Retrieval evaluation requires entailment and non-entailment rows")
-    if max_queries > 0 and len(positives) > max_queries:
-        selected = rng.choice(len(positives), size=max_queries, replace=False)
-        positives = positives.iloc[selected].reset_index(drop=True)
-
-    rows: list[dict[str, Any]] = []
-    candidate_slots: list[int] = []
-    relevant_slots: list[int] = []
-    replace = len(negatives) < pool_size - 1
-
-    for query_id, row in positives.iterrows():
-        query = row["text_b"]
-        positive_candidate = row["text_a"]
-        negative_indices = rng.choice(len(negatives), size=pool_size - 1, replace=replace)
-        candidate_texts = [positive_candidate] + negatives.iloc[negative_indices]["text_a"].tolist()
-        permutation = rng.permutation(pool_size)
-        relevant_slot = int(np.flatnonzero(permutation == 0)[0])
-
-        for slot, candidate_index in enumerate(permutation):
-            rows.append(
-                {
-                    "query_id": query_id,
-                    "text_a": candidate_texts[candidate_index],
-                    "text_b": query,
-                }
-            )
-            candidate_slots.append(slot)
-            relevant_slots.append(relevant_slot)
-
-    eval_frame = pd.DataFrame(rows)
-    eval_frame["entailment_probability"] = predict_entailment_probabilities(
-        trainer,
-        tokenizer,
-        eval_frame,
-        max_length,
-    )
-    eval_frame["candidate_slot"] = candidate_slots
-    eval_frame["relevant_slot"] = relevant_slots
-
-    ranks: list[int] = []
-    for _, group in eval_frame.groupby("query_id", sort=False):
-        ranked = group.sort_values("entailment_probability", ascending=False).reset_index(drop=True)
-        relevant_slot = int(group["relevant_slot"].iloc[0])
-        rank = int(np.flatnonzero(ranked["candidate_slot"].to_numpy() == relevant_slot)[0]) + 1
-        ranks.append(rank)
-
-    rank_array = np.asarray(ranks)
-    hit_at_1 = float(np.mean(rank_array <= 1))
-    hit_at_5 = float(np.mean(rank_array <= min(5, pool_size)))
-    metrics = {
-        "queries": int(len(rank_array)),
-        "candidate_pool_size": int(pool_size),
-        "precision_at_1": hit_at_1,
-        "precision_at_5": float(hit_at_5 / min(5, pool_size)),
-        "recall_at_5": hit_at_5,
-        "mrr": float(np.mean(1.0 / rank_array)),
-        "mean_rank": float(np.mean(rank_array)),
-    }
-    return metrics, eval_frame
-
-
-def benchmark_evaluation(
-    args: argparse.Namespace,
-    trainer: Trainer,
-    tokenizer: Any,
-    threshold: float,
-) -> dict[str, Any] | None:
-    if args.skip_benchmark:
-        return None
-    try:
-        benchmark_raw = load_dataset(args.benchmark_dataset_name)
-        benchmark_test_raw = get_split(benchmark_raw, ("test",))
-        text_a_col, text_b_col = choose_text_columns(benchmark_test_raw)
-        benchmark_test = normalize_dataset(benchmark_test_raw, text_a_col, text_b_col)
-        benchmark_test = sample_dataset(benchmark_test, args.max_test_samples, args.seed)
-        benchmark_dataset = DatasetDict({"test": benchmark_test})
-        benchmark_tokenized = tokenize_dataset(benchmark_dataset, tokenizer, args.max_length)["test"]
-        benchmark_nli = trainer.evaluate(benchmark_tokenized, metric_key_prefix="benchmark_test")
-        benchmark_prediction = trainer.predict(benchmark_tokenized)
-        probs = softmax_np(benchmark_prediction.predictions)
-        labels = np.asarray(benchmark_prediction.label_ids)
-        binary = binary_similarity_metrics(labels, probs[:, LABEL2ID["entailment"]], threshold)
-        return {"nli": benchmark_nli, "binary_similarity": binary}
-    except Exception as exc:
-        return {"error": repr(exc)}
+        encoded = {key: value.to(device) for key, value in encoded.items()}
+        with torch.no_grad():
+            logits = model(**encoded).logits.detach().cpu().numpy()
+        scores.append(softmax_np(logits)[:, LABEL2ID["entailment"]])
+    return np.concatenate(scores) if scores else np.asarray([], dtype=float)
 
 
 def main() -> None:
     args = parse_args()
     if not torch.cuda.is_available() and not args.allow_cpu:
-        raise RuntimeError(
-            "CUDA GPU not found. On Kaggle, set Settings > Accelerator > GPU."
-        )
-    if args.push_to_hub and not args.hub_model_id:
-        raise ValueError("--hub-model-id is required with --push-to-hub")
+        raise RuntimeError("CUDA GPU not found. In Kaggle, enable GPU before running this notebook.")
 
     set_seed(args.seed)
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-
     output_dir = Path(args.output_dir)
-    checkpoint_dir = output_dir / "checkpoints"
-    final_model_dir = output_dir / "final"
-    result_dir = Path(args.result_dir)
+    model_dir = Path(args.model_dir)
+    checkpoint_dir = model_dir / "checkpoints"
+    final_dir = model_dir / "final"
     output_dir.mkdir(parents=True, exist_ok=True)
-    result_dir.mkdir(parents=True, exist_ok=True)
+    model_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset = build_dataset(args)
+    frames = load_splits(args.input_dir)
+    for split, frame in frames.items():
+        validate_pair_class_frame(frame, split)
+
+    raw_dataset = DatasetDict(
+        {
+            "train": to_dataset(frames["train"]),
+            "val": to_dataset(frames["val"]),
+            "test": to_dataset(frames["test"]),
+        }
+    )
+    trainer_eval = sample_dataset(raw_dataset["val"], args.trainer_eval_samples, args.seed)
+
     tokenizer = AutoTokenizer.from_pretrained(args.base_model, use_fast=True)
-    tokenized = tokenize_dataset(dataset, tokenizer, args.max_length)
+    tokenized_train = tokenize_dataset(raw_dataset["train"], tokenizer, args.max_length)
+    tokenized_val_eval = tokenize_dataset(trainer_eval, tokenizer, args.max_length)
+    tokenized_val_full = tokenize_dataset(raw_dataset["val"], tokenizer, args.max_length)
+    tokenized_test_full = tokenize_dataset(raw_dataset["test"], tokenizer, args.max_length)
 
     model = AutoModelForSequenceClassification.from_pretrained(
         args.base_model,
@@ -381,21 +203,7 @@ def main() -> None:
 
     def compute_metrics(eval_pred: Any) -> dict[str, float]:
         logits, labels = eval_pred
-        preds = np.argmax(logits, axis=-1)
-        probs = softmax_np(logits)
-        return {
-            "accuracy": float(accuracy_score(labels, preds)),
-            "macro_f1": float(f1_score(labels, preds, average="macro")),
-            "entailment_f1": float(
-                f1_score(
-                    labels == LABEL2ID["entailment"],
-                    preds == LABEL2ID["entailment"],
-                )
-            ),
-            "entailment_roc_auc": float(
-                roc_auc_score(labels == LABEL2ID["entailment"], probs[:, LABEL2ID["entailment"]])
-            ),
-        }
+        return nli_metrics(np.asarray(labels), np.asarray(logits), "eval")
 
     fp16 = bool(torch.cuda.is_available())
     training_args = make_training_args(
@@ -415,7 +223,7 @@ def main() -> None:
         save_total_limit=args.save_total_limit,
         logging_steps=args.logging_steps,
         load_best_model_at_end=True,
-        metric_for_best_model="macro_f1",
+        metric_for_best_model="eval_macro_f1",
         greater_is_better=True,
         report_to="none",
         seed=args.seed,
@@ -425,26 +233,62 @@ def main() -> None:
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=tokenized["train"],
-        eval_dataset=tokenized["dev"],
-        tokenizer=tokenizer,
+        train_dataset=tokenized_train,
+        eval_dataset=tokenized_val_eval,
         data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
         compute_metrics=compute_metrics,
+        callbacks=[
+            EarlyStoppingCallback(
+                early_stopping_patience=args.early_stopping_patience,
+                early_stopping_threshold=args.early_stopping_threshold,
+            )
+        ],
+        **trainer_tokenizer_kwargs(tokenizer),
+    )
+    train_result = trainer.train()
+    trainer.save_model(str(final_dir))
+    tokenizer.save_pretrained(str(final_dir))
+
+    val_prediction = trainer.predict(tokenized_val_full)
+    test_prediction = trainer.predict(tokenized_test_full)
+    val_logits = np.asarray(val_prediction.predictions)
+    test_logits = np.asarray(test_prediction.predictions)
+    val_labels = np.asarray(val_prediction.label_ids)
+    test_labels = np.asarray(test_prediction.label_ids)
+    val_scores = softmax_np(val_logits)[:, LABEL2ID["entailment"]]
+    test_scores = softmax_np(test_logits)[:, LABEL2ID["entailment"]]
+
+    threshold, pair_report = evaluate_pair_splits(frames["val"], frames["test"], val_scores, test_scores)
+    retrieval = evaluate_retrieval_splits(
+        frames,
+        score_pairs=lambda retrieval_frame: cross_encoder_scores(
+            model,
+            tokenizer,
+            str(training_args.device),
+            retrieval_frame,
+            args.eval_batch_size,
+            args.max_length,
+        ),
+        pool_size=args.retrieval_pool_size,
+        max_queries=args.max_retrieval_queries,
+        seed=args.seed,
+    )
+    test5k_frame, test5k_scores, test5k_report = evaluate_test_sample_performance(
+        frames["test"],
+        score_pairs=lambda sample_frame: cross_encoder_scores(
+            model,
+            tokenizer,
+            str(training_args.device),
+            sample_frame,
+            args.eval_batch_size,
+            args.max_length,
+        ),
+        threshold=threshold,
+        sample_size=args.test_sample_size,
+        seed=args.seed,
     )
 
-    train_result = trainer.train()
-    trainer.save_model(str(final_model_dir))
-    tokenizer.save_pretrained(str(final_model_dir))
-
-    dev_metrics = trainer.evaluate(tokenized["dev"], metric_key_prefix="dev")
-    test_metrics = trainer.evaluate(tokenized["test"], metric_key_prefix="test")
-
-    test_prediction = trainer.predict(tokenized["test"])
-    test_logits = test_prediction.predictions
-    test_labels = np.asarray(test_prediction.label_ids)
-    test_probs = softmax_np(test_logits)
-    test_preds = np.argmax(test_probs, axis=-1)
-
+    test_preds = softmax_np(test_logits).argmax(axis=-1)
     report = classification_report(
         test_labels,
         test_preds,
@@ -452,57 +296,39 @@ def main() -> None:
         output_dict=True,
         zero_division=0,
     )
-    confusion = confusion_matrix(test_labels, test_preds)
-    pd.DataFrame(report).T.to_csv(result_dir / "cross_encoder_classification_report.csv")
+    pd.DataFrame(report).T.to_csv(output_dir / "cross_encoder_classification_report.csv")
     pd.DataFrame(
-        confusion,
+        confusion_matrix(test_labels, test_preds),
         index=[ID2LABEL[index] for index in range(3)],
         columns=[ID2LABEL[index] for index in range(3)],
-    ).to_csv(result_dir / "cross_encoder_confusion_matrix.csv")
+    ).to_csv(output_dir / "cross_encoder_confusion_matrix.csv")
 
-    dev_prediction = trainer.predict(tokenized["dev"])
-    dev_probs = softmax_np(dev_prediction.predictions)
-    dev_labels = np.asarray(dev_prediction.label_ids)
-    dev_entailment_probs = dev_probs[:, LABEL2ID["entailment"]]
-    threshold, best_dev_f1 = choose_threshold(
-        dev_labels == LABEL2ID["entailment"],
-        dev_entailment_probs,
-    )
-    test_entailment_probs = test_probs[:, LABEL2ID["entailment"]]
-    dev_binary_metrics = binary_similarity_metrics(dev_labels, dev_entailment_probs, threshold)
-    test_binary_metrics = binary_similarity_metrics(test_labels, test_entailment_probs, threshold)
-
-    test_frame = dataset["test"].to_pandas()
-    test_frame["label_name"] = test_frame["labels"].map(ID2LABEL)
-    test_frame["pred_label_id"] = test_preds
-    test_frame["pred_label_name"] = test_frame["pred_label_id"].map(ID2LABEL)
-    test_frame["entailment_probability"] = test_entailment_probs
-    test_frame["predicted_similar"] = test_frame["entailment_probability"] >= threshold
-    test_frame.to_csv(result_dir / "cross_encoder_test_predictions.csv", index=False)
-
-    retrieval_metrics, retrieval_predictions = rerank_retrieval_metrics(
-        trainer=trainer,
-        tokenizer=tokenizer,
-        frame=dataset["test"].to_pandas(),
-        max_length=args.max_length,
-        max_queries=args.rerank_queries,
-        pool_size=args.rerank_pool_size,
-        seed=args.seed,
-    )
-    retrieval_predictions.to_csv(result_dir / "cross_encoder_retrieval_predictions.csv", index=False)
-
-    benchmark_metrics = benchmark_evaluation(args, trainer, tokenizer, threshold)
-
-    metadata = {
+    metrics: dict[str, Any] = {
         "task": "cross-encoder-nli-reranker-for-semantic-search",
-        "train_dataset_name": args.train_dataset_name,
-        "train_dataset_config": args.train_dataset_config,
-        "benchmark_dataset_name": None if args.skip_benchmark else args.benchmark_dataset_name,
+        "fixed_dataset": "AllNLI pair-class full 70/15/15",
+        "positive_label": POSITIVE_LABEL,
+        "model": {
+            "name": "Cross-Encoder NLI",
+            "base_model": args.base_model,
+            "trained_in_project": True,
+            "loss": "CrossEntropyLoss",
+            "num_labels": 3,
+        },
+        "nli": {
+            "val": nli_metrics(val_labels, val_logits, "val"),
+            "test": nli_metrics(test_labels, test_logits, "test"),
+        },
+        **pair_report,
+        "retrieval": retrieval,
+        "test_sample_performance": test5k_report,
+    }
+    metadata = {
         "base_model": args.base_model,
+        "fixed_dataset": "AllNLI pair-class full 70/15/15",
         "label2id": LABEL2ID,
-        "train_rows": len(dataset["train"]),
-        "dev_rows": len(dataset["dev"]),
-        "test_rows": len(dataset["test"]),
+        "train_rows": len(frames["train"]),
+        "val_rows": len(frames["val"]),
+        "test_rows": len(frames["test"]),
         "epochs": args.num_train_epochs,
         "batch_size": args.batch_size,
         "eval_batch_size": args.eval_batch_size,
@@ -511,43 +337,35 @@ def main() -> None:
         "warmup_ratio": args.warmup_ratio,
         "weight_decay": args.weight_decay,
         "max_length": args.max_length,
+        "early_stopping_patience": args.early_stopping_patience,
+        "early_stopping_threshold": args.early_stopping_threshold,
         "fp16": fp16,
         "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-        "train_result": json_safe(train_result.metrics),
-        "dev_nli_metrics": json_safe(dev_metrics),
-        "test_nli_metrics": json_safe(test_metrics),
-        "selected_similarity_threshold": threshold,
-        "selected_similarity_threshold_dev_f1": best_dev_f1,
-        "dev_binary_similarity": dev_binary_metrics,
-        "test_binary_similarity": test_binary_metrics,
-        "retrieval_rerank": retrieval_metrics,
-        "benchmark_metrics": json_safe(benchmark_metrics),
-        "final_model_dir": str(final_model_dir),
+        "train_result": json_safe(getattr(train_result, "metrics", {})),
+        "final_model_dir": str(final_dir),
     }
-    (result_dir / "cross_encoder_training_metadata.json").write_text(
-        json.dumps(metadata, indent=2),
-        encoding="utf-8",
+
+    save_json(metrics, output_dir / "metrics.json")
+    save_json(metadata, output_dir / "training_metadata.json")
+    save_pair_predictions(frames["val"], val_scores, threshold, "entailment_probability", output_dir / "val_predictions.csv")
+    save_pair_predictions(frames["test"], test_scores, threshold, "entailment_probability", output_dir / "test_predictions.csv")
+    save_json(test5k_report, output_dir / "test5k_performance.json")
+    save_pair_predictions(
+        test5k_frame,
+        test5k_scores,
+        threshold,
+        "entailment_probability",
+        output_dir / "test5k_predictions.csv",
     )
-    print(json.dumps(metadata, indent=2))
-
-    shutil.make_archive(str(output_dir), "zip", str(output_dir))
-    shutil.make_archive(str(result_dir), "zip", str(result_dir))
-
-    if args.push_to_hub:
-        model.push_to_hub(
-            args.hub_model_id,
-            private=args.hub_private_repo,
-            token=os.environ.get("HF_TOKEN"),
-        )
-        tokenizer.push_to_hub(
-            args.hub_model_id,
-            private=args.hub_private_repo,
-            token=os.environ.get("HF_TOKEN"),
-        )
-
-    print(f"Saved final model -> {final_model_dir}")
-    print(f"Saved outputs -> {result_dir}")
+    binary_confusion(entailment_targets(frames["test"]), test_scores, threshold).to_csv(
+        output_dir / "binary_confusion_matrix.csv"
+    )
+    print(json.dumps(json_safe(metadata), indent=2))
+    print(f"Saved Cross-Encoder model -> {final_dir}")
+    print(f"Saved Cross-Encoder outputs -> {output_dir}")
 
 
 if __name__ == "__main__":
     main()
+
+

@@ -11,14 +11,14 @@ from typing import Any
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from similarity_search_fix.data.text_utils import (
+from similarity_search.data.text_utils import (
     char_count,
     lexical_overlap,
     normalize_text,
     token_count,
     top_words,
 )
-from similarity_search_fix.models.evaluation import ID2LABEL, LABEL2ID, SCORE_BY_LABEL, save_json
+from similarity_search.models.evaluation import ID2LABEL, LABEL2ID, SCORE_BY_LABEL, save_json
 
 SOURCE_SPLITS = ("train", "dev", "test")
 
@@ -27,8 +27,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-name", default="sentence-transformers/all-nli")
     parser.add_argument("--dataset-config", default="pair-class")
-    parser.add_argument("--output-dir", default="fix/data/processed/allnli_70_15_15/pair-class")
-    parser.add_argument("--outputs-dir", default="fix/outputs")
+    parser.add_argument("--output-dir", default="data/processed/allnli_70_15_15/pair-class")
+    parser.add_argument("--outputs-dir", default="outputs")
     parser.add_argument("--cache-dir", default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--train-ratio", type=float, default=0.70)
@@ -299,4 +299,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
 

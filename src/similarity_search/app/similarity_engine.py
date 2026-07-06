@@ -24,7 +24,15 @@ os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
 TFIDF_DIR = MODELS_DIR / "tfidf_baseline"
 BI_ENCODER_DIR = MODELS_DIR / "allnli-minilm-biencoder" / "final"
 CROSS_ENCODER_DIR = MODELS_DIR / "allnli-cross-encoder-nli" / "final"
-SFTBE_CHECKPOINT_PATH = MODELS_DIR / "sftbe_checkpoint" / "stage0_final.pt"
+SFTBE_CHECKPOINT_CANDIDATES = (
+    MODELS_DIR / "sftbe_checkpoint" / "stage1_allnli_final.pt",
+    MODELS_DIR / "sftbe_checkpoint" / "stage1_allnli_best.pt",
+    MODELS_DIR / "sftbe_checkpoint" / "stage0_final.pt",
+)
+SFTBE_CHECKPOINT_PATH = next(
+    (path for path in SFTBE_CHECKPOINT_CANDIDATES if path.exists()),
+    SFTBE_CHECKPOINT_CANDIDATES[0],
+)
 
 PRETRAINED_MINILM = "sentence-transformers/all-MiniLM-L6-v2"
 LABEL_NAMES = {0: "entailment", 1: "neutral", 2: "contradiction"}

@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from similarity_search_fix.models.evaluation import (
+from similarity_search.models.evaluation import (
     POSITIVE_LABEL,
     binary_confusion,
     entailment_targets,
@@ -27,9 +27,9 @@ from similarity_search_fix.models.evaluation import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input-dir", default="fix/data/processed/allnli_70_15_15/pair-class")
-    parser.add_argument("--output-dir", default="fix/outputs/tfidf_baseline")
-    parser.add_argument("--model-dir", default="fix/models/tfidf_baseline")
+    parser.add_argument("--input-dir", default="data/processed/allnli_70_15_15_clean/pair-class")
+    parser.add_argument("--output-dir", default="outputs/tfidf_baseline")
+    parser.add_argument("--model-dir", default="models/tfidf_baseline")
     parser.add_argument("--max-features", type=int, default=50_000)
     parser.add_argument("--min-df", type=int, default=2)
     parser.add_argument("--ngram-max", type=int, default=2, choices=(1, 2, 3))
@@ -154,4 +154,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 

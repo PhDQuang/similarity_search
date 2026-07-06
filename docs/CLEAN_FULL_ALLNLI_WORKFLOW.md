@@ -1,6 +1,6 @@
 # Workflow sua benchmark model
 
-## Ly do can folder fix
+## Ly do can pipeline clean-full
 
 Project hien tai co nhieu artifact tot, nhung cac model khong hoan toan train/evaluate tren
 cung mot dataset/split:
@@ -10,7 +10,7 @@ cung mot dataset/split:
 - Cross-Encoder co run rieng tren `pair-class` va benchmark dataset khac.
 - SFT-BE xuat phat tu distillation checkpoint.
 
-De so sanh khoa hoc theo barem, folder nay tao mot benchmark moi:
+De so sanh khoa hoc theo barem, pipeline nay tao mot benchmark moi:
 
 ```text
 AllNLI pair-class full -> preprocess chung -> shuffle -> 70/15/15 -> train/evaluate tat ca model
@@ -21,7 +21,7 @@ AllNLI pair-class full -> preprocess chung -> shuffle -> 70/15/15 -> train/evalu
 Script:
 
 ```powershell
-python -m similarity_search_fix.data.prepare_allnli_70_15_15
+python -m similarity_search.data.prepare_allnli_70_15_15
 ```
 
 Preprocessing:
@@ -64,16 +64,16 @@ distractors = premise tu neutral/contradiction trong cung split
 ## Lenh chay nhanh local hoac Kaggle terminal
 
 ```powershell
-python -m pip install -r fix/requirements-kaggle.txt
-python -m pip install -e fix
+python -m pip install -r requirements-kaggle.txt
+python -m pip install -e .
 
-python -m similarity_search_fix.data.prepare_allnli_70_15_15
-python -m similarity_search_fix.models.train_tfidf
-python -m similarity_search_fix.models.tfidf_preprocessing_ablation
-python -m similarity_search_fix.models.train_minilm
-python -m similarity_search_fix.models.train_cross_encoder
-python -m similarity_search_fix.models.train_sftbe --checkpoint-path models/sftbe_checkpoint/stage0_final.pt
-python -m similarity_search_fix.models.build_barem_tables
+python -m similarity_search.data.prepare_allnli_70_15_15
+python -m similarity_search.models.train_tfidf
+python -m similarity_search.models.tfidf_preprocessing_ablation
+python -m similarity_search.models.train_minilm
+python -m similarity_search.models.train_cross_encoder
+python -m similarity_search.models.train_sftbe --checkpoint-path models/sftbe_checkpoint/stage0_final.pt
+python -m similarity_search.models.build_barem_tables
 ```
 
 ## Ghi chu Kaggle
@@ -81,5 +81,7 @@ python -m similarity_search_fix.models.build_barem_tables
 - MiniLM va Cross-Encoder can bat GPU.
 - SFT-BE can upload checkpoint hien tai vao Kaggle Dataset neu notebook khong clone/copy duoc `models/sftbe_checkpoint/stage0_final.pt`.
 - Neu het thoi gian GPU, giam `--max-retrieval-queries` tam thoi de test pipeline. Lan final nen de `0` neu du thoi gian de dung all entailment queries.
-- Cac output deu ghi vao `fix/`, khong ghi de `outputs/` hay `models/` cua project goc.
+- Cac output mac dinh ghi vao `outputs/` va model ghi vao `models/`. Hai thu muc
+  nay da duoc ignore de khong push nham artifact lon.
+
 

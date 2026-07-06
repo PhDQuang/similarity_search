@@ -120,6 +120,38 @@ outputs/figures/allnli/pair-class/
 outputs/reports/allnli/pair-class/
 ```
 
+## Clean-full AllNLI training
+
+The current comparable benchmark uses the full AllNLI `pair-class` data,
+shared preprocessing, one clean 70/15/15 split, early stopping for neural
+models, and a fixed 5k test performance report.
+
+Prepare the clean split locally:
+
+```powershell
+python -m similarity_search.data.prepare_allnli_70_15_15_clean
+```
+
+Train/evaluate individual models:
+
+```powershell
+python -m similarity_search.models.train_tfidf
+python -m similarity_search.models.train_minilm
+python -m similarity_search.models.train_cross_encoder
+python -m similarity_search.models.train_sftbe --checkpoint-path models/sftbe_checkpoint/stage0_final.pt
+```
+
+Kaggle-ready independent notebooks live in `notebooks/`:
+
+```text
+01_train_tfidf_clean_full_eval5k_kaggle.ipynb
+02_train_minilm_clean_full_earlystop_eval5k_kaggle.ipynb
+03_train_cross_encoder_clean_full_earlystop_eval5k_kaggle.ipynb
+04_train_sftbe_clean_full_earlystop_eval5k_kaggle.ipynb
+```
+
+See `docs/CLEAN_FULL_ALLNLI_PIPELINE.md` for the full workflow.
+
 ## Run the TF-IDF baseline
 
 Fit TF-IDF on the training split, select the entailment similarity threshold

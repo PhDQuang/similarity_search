@@ -12,7 +12,7 @@ import pandas as pd
 import torch
 from datasets import Dataset
 
-from similarity_search_fix.models.evaluation import (
+from similarity_search.models.evaluation import (
     POSITIVE_LABEL,
     SCORE_BY_LABEL,
     binary_confusion,
@@ -32,9 +32,9 @@ DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input-dir", default="fix/data/processed/allnli_70_15_15/pair-class")
-    parser.add_argument("--output-dir", default="fix/outputs/minilm_finetuned")
-    parser.add_argument("--model-dir", default="fix/models/allnli_70_15_15_minilm")
+    parser.add_argument("--input-dir", default="data/processed/allnli_70_15_15_clean/pair-class")
+    parser.add_argument("--output-dir", default="outputs/finetuned_minilm")
+    parser.add_argument("--model-dir", default="models/allnli-minilm-biencoder")
     parser.add_argument("--base-model", default=DEFAULT_MODEL)
     parser.add_argument("--num-train-epochs", type=float, default=5.0)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -296,4 +296,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 

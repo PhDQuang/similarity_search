@@ -1,116 +1,96 @@
-"""Run a small TF-IDF preprocessing ablation on AllNLI pair-class."""
+"""TF-IDF preprocessing ablation on the fixed AllNLI 70/15/15 split."""
 
 from __future__ import annotations
 
 import argparse
+import re
 from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
 
-from similarity_search.models.tfidf_baseline import (
+from similarity_search.data.text_utils import normalize_text
+from similarity_search.models.evaluation import (
     POSITIVE_LABEL,
     choose_threshold,
-    fit_vectorizer,
-    load_split,
-    pair_metrics,
-    pair_scores,
-    retrieval_metrics,
-    validate_frame,
+    evaluate_retrieval_splits,
+    load_splits,
+    binary_pair_metrics,
+    entailment_targets,
+    validate_pair_class_frame,
 )
-
+from similarity_search.models.train_tfidf import fit_vectorizer, pair_scores, retrieval_pair_scores
 
 VariantFn = Callable[[pd.Series], pd.Series]
+PUNCT_RE = re.compile(r"[^\w\s]")
+DIGIT_RE = re.compile(r"\d+")
+SPACE_RE = re.compile(r"\s+")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--input-dir",
-        default="data/processed/allnli/pair-class",
-        help="Directory containing train/dev/test parquet or CSV files.",
-    )
-    parser.add_argument(
-        "--output",
-        default="outputs/tables/tfidf_preprocessing_ablation.csv",
-        help="CSV path for the ablation table.",
-    )
+    parser.add_argument("--input-dir", default="data/processed/allnli_70_15_15_clean/pair-class")
+    parser.add_argument("--output", default="outputs/tables/tfidf_preprocessing_ablation.csv")
     parser.add_argument("--max-features", type=int, default=50_000)
     parser.add_argument("--min-df", type=int, default=2)
     parser.add_argument("--retrieval-pool-size", type=int, default=20)
-    parser.add_argument("--max-retrieval-queries", type=int, default=1_000)
+    parser.add_argument("--max-retrieval-queries", type=int, default=5000)
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
 
-def identity(series: pd.Series) -> pd.Series:
-    return series.fillna("").astype(str)
+def normalized(series: pd.Series) -> pd.Series:
+    return series.map(normalize_text)
 
 
-def lowercase(series: pd.Series) -> pd.Series:
-    return identity(series).str.lower()
+def remove_punctuation(series: pd.Series) -> pd.Series:
+    return normalized(series).str.replace(PUNCT_RE, " ", regex=True).str.replace(SPACE_RE, " ", regex=True).str.strip()
 
 
-def no_punctuation(series: pd.Series) -> pd.Series:
-    return lowercase(series).str.replace(r"[^\w\s]", " ", regex=True).str.replace(
-        r"\s+",
-        " ",
-        regex=True,
-    )
-
-
-def no_digits_or_punctuation(series: pd.Series) -> pd.Series:
-    return no_punctuation(series).str.replace(r"\d+", " ", regex=True).str.replace(
-        r"\s+",
-        " ",
-        regex=True,
-    )
+def remove_punctuation_digits(series: pd.Series) -> pd.Series:
+    return remove_punctuation(series).str.replace(DIGIT_RE, " ", regex=True).str.replace(SPACE_RE, " ", regex=True).str.strip()
 
 
 def apply_variant(frame: pd.DataFrame, transform: VariantFn) -> pd.DataFrame:
     result = frame.copy()
-    result["premise_clean"] = transform(result["premise_clean"])
-    result["hypothesis_clean"] = transform(result["hypothesis_clean"])
+    result["premise_clean"] = transform(result["premise"])
+    result["hypothesis_clean"] = transform(result["hypothesis"])
     return result
 
 
 def run_variant(
     name: str,
     transform: VariantFn,
-    frames: dict[str, pd.DataFrame],
-    max_features: int,
-    min_df: int,
     ngram_max: int,
-    retrieval_pool_size: int,
-    max_retrieval_queries: int,
-    seed: int,
+    frames: dict[str, pd.DataFrame],
+    args: argparse.Namespace,
 ) -> dict[str, float | int | str]:
     variant_frames = {split: apply_variant(frame, transform) for split, frame in frames.items()}
     vectorizer = fit_vectorizer(
         variant_frames["train"],
-        max_features=max_features,
-        min_df=min_df,
+        max_features=args.max_features,
+        min_df=args.min_df,
         ngram_max=ngram_max,
     )
-    dev_scores = pair_scores(vectorizer, variant_frames["dev"])
+    val_scores = pair_scores(vectorizer, variant_frames["val"])
     test_scores = pair_scores(vectorizer, variant_frames["test"])
-    dev_targets = (variant_frames["dev"]["label_name"] == POSITIVE_LABEL).to_numpy()
-    test_targets = (variant_frames["test"]["label_name"] == POSITIVE_LABEL).to_numpy()
-    threshold, dev_f1 = choose_threshold(dev_targets, dev_scores)
-    pair = pair_metrics(test_targets, test_scores, threshold)
-    retrieval = retrieval_metrics(
-        vectorizer,
-        variant_frames["test"],
-        retrieval_pool_size,
-        max_retrieval_queries,
-        seed,
-    )
+    val_targets = entailment_targets(variant_frames["val"])
+    test_targets = entailment_targets(variant_frames["test"])
+    threshold, val_f1 = choose_threshold(val_targets, val_scores)
+    pair = binary_pair_metrics(test_targets, test_scores, threshold)
+    retrieval = evaluate_retrieval_splits(
+        variant_frames,
+        score_pairs=lambda retrieval_frame: retrieval_pair_scores(vectorizer, retrieval_frame),
+        pool_size=args.retrieval_pool_size,
+        max_queries=args.max_retrieval_queries,
+        seed=args.seed,
+    )["test"]
     return {
         "variant": name,
         "ngram_range": f"1-{ngram_max}",
         "vocabulary_size": len(vectorizer.vocabulary_),
-        "dev_threshold": threshold,
-        "dev_f1": dev_f1,
+        "val_threshold": threshold,
+        "val_f1": val_f1,
         "test_accuracy": pair["accuracy"],
         "test_precision": pair["precision"],
         "test_recall": pair["recall"],
@@ -119,47 +99,34 @@ def run_variant(
         "precision_at_1": retrieval["precision_at_1"],
         "recall_at_5": retrieval["recall_at_5"],
         "mrr": retrieval["mrr"],
-        "mean_rank": retrieval["mean_rank"],
+        "positive_label": POSITIVE_LABEL,
     }
 
 
 def main() -> None:
     args = parse_args()
-    input_dir = Path(args.input_dir)
-    frames = {split: load_split(input_dir, split) for split in ("train", "dev", "test")}
+    frames = load_splits(args.input_dir)
     for split, frame in frames.items():
-        validate_frame(frame, split)
+        validate_pair_class_frame(frame, split)
 
     variants: list[tuple[str, VariantFn, int]] = [
-        ("original_clean_text_unigram", identity, 1),
-        ("lowercase_unigram", lowercase, 1),
-        ("lowercase_no_punctuation_unigram", no_punctuation, 1),
-        ("lowercase_no_punctuation_no_digits_unigram", no_digits_or_punctuation, 1),
-        ("lowercase_no_punctuation_bigram", no_punctuation, 2),
+        ("lowercase_normalized_unigram", normalized, 1),
+        ("lowercase_normalized_bigram", normalized, 2),
+        ("lowercase_no_punctuation_unigram", remove_punctuation, 1),
+        ("lowercase_no_punctuation_bigram", remove_punctuation, 2),
+        ("lowercase_no_punctuation_no_digits_bigram", remove_punctuation_digits, 2),
     ]
-    rows = [
-        run_variant(
-            name,
-            transform,
-            frames,
-            args.max_features,
-            args.min_df,
-            ngram_max,
-            args.retrieval_pool_size,
-            args.max_retrieval_queries,
-            args.seed,
-        )
-        for name, transform, ngram_max in variants
-    ]
-
+    rows = [run_variant(name, transform, ngram_max, frames, args) for name, transform, ngram_max in variants]
     table = pd.DataFrame(rows).sort_values("test_f1", ascending=False)
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    table.to_csv(output_path, index=False)
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(output, index=False)
     print(table.to_string(index=False))
-    print(f"Saved ablation table -> {output_path}")
+    print(f"Saved ablation table -> {output}")
 
 
 if __name__ == "__main__":
     main()
+
+
 

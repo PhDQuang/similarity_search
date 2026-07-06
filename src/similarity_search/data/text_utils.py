@@ -1,4 +1,4 @@
-"""Text normalization and lightweight feature helpers."""
+"""Shared text preprocessing and EDA helpers for the fixed benchmark."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from typing import Iterable
 URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 HTML_RE = re.compile(r"<[^>]+>")
 SPACE_RE = re.compile(r"\s+")
-TOKEN_RE = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?|\d+(?:\.\d+)?")
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+TOKEN_RE = re.compile(r"[a-z]+(?:'[a-z]+)?|\d+(?:\.\d+)?")
 
 BASIC_STOPWORDS = {
     "a",
@@ -41,20 +42,20 @@ BASIC_STOPWORDS = {
 }
 
 
-def normalize_text(text: object, lowercase: bool = False) -> str:
-    """Normalize Unicode, remove obvious artifacts, and collapse whitespace."""
+def normalize_text(text: object, lowercase: bool = True) -> str:
+    """Normalize Unicode, remove obvious artifacts, lowercase, and collapse spaces."""
     if text is None:
         return ""
     normalized = unicodedata.normalize("NFKC", str(text))
     normalized = normalized.replace("\u00a0", " ")
     normalized = HTML_RE.sub(" ", normalized)
-    normalized = URL_RE.sub(" <URL> ", normalized)
+    normalized = URL_RE.sub(" <url> ", normalized)
+    normalized = CONTROL_RE.sub(" ", normalized)
     normalized = SPACE_RE.sub(" ", normalized).strip()
     return normalized.lower() if lowercase else normalized
 
 
 def simple_tokenize(text: object) -> list[str]:
-    """Tokenize English text for EDA/baseline statistics."""
     return TOKEN_RE.findall(normalize_text(text, lowercase=True))
 
 
@@ -67,11 +68,8 @@ def char_count(text: object) -> int:
 
 
 def lexical_overlap(text_a: object, text_b: object) -> float:
-    """Return Jaccard overlap between two token sets."""
     tokens_a = set(simple_tokenize(text_a))
     tokens_b = set(simple_tokenize(text_b))
-    if not tokens_a and not tokens_b:
-        return 0.0
     union = tokens_a | tokens_b
     if not union:
         return 0.0
@@ -81,7 +79,7 @@ def lexical_overlap(text_a: object, text_b: object) -> float:
 def top_words(texts: Iterable[object], top_n: int = 50) -> list[tuple[str, int]]:
     counter: Counter[str] = Counter()
     for text in texts:
-        tokens = [token for token in simple_tokenize(text) if token not in BASIC_STOPWORDS]
-        counter.update(tokens)
+        counter.update(token for token in simple_tokenize(text) if token not in BASIC_STOPWORDS)
     return counter.most_common(top_n)
+
 
