@@ -1,70 +1,128 @@
 # Semantic Document Similarity Search
 
-This repo is for an NLP final project about semantic document search and
-document-to-document similarity using AllNLI.
+This repository implements a complete natural language processing system for semantic document search and document-to-document similarity comparison using AllNLI and modern embedding architectures. The project covers data preprocessing, exploratory data analysis, baseline modeling, neural bi-encoders, cross-encoders, and hybrid reranking pipelines, along with an interactive web application demo.
 
-## Main dataset
+## Overview and Architecture
 
-- Hugging Face dataset: `sentence-transformers/all-nli`
-- Recommended subsets:
-  - `pair-class`: EDA, NLI classification, label distribution.
-  - `pair-score`: similarity scoring/regression experiments.
-  - `pair`: positive pairs for bi-encoder training.
-  - `triplet`: anchor-positive-negative training with hard negatives.
+The system combines fast dense retrieval with high-precision reranking to achieve both efficiency and accuracy:
 
-## Repo structure
+1. **Bi-Encoder (Fast Retrieval)**:
+   - Uses sentence embedding models such as `sentence-transformers/all-MiniLM-L6-v2` and custom supervised fine-tuned bi-encoders (SFT-BE).
+   - Encodes document sentences and input queries into dense 384-dimensional vector representations.
+   - Calculates cosine similarity across candidate sentences to rapidly extract the top-M relevant matches.
+
+2. **Cross-Encoder NLI (Precise Reranking)**:
+   - Uses a natural language inference (NLI) classification model based on `distilbert-base-uncased`, fine-tuned on sentence pairs.
+   - Classifies pairs into three semantic relations: `entailment`, `neutral`, and `contradiction`.
+   - By processing query and document sentences simultaneously through self-attention layers, it achieves higher precision than standalone bi-encoders.
+
+3. **Hybrid Reranking System**:
+   - Implements a two-stage retrieval pipeline:
+     - **Stage 1**: The Bi-Encoder retrieves top-M candidate sentences (e.g., M = 30) based on cosine similarity.
+     - **Stage 2**: The Cross-Encoder reranks the retrieved candidates based on their entailment probability.
+     - **Final Scoring**: Combines both scores using a weighted sum:
+       $$\text{Score} = \alpha \times \text{Entailment\_Prob} + (1 - \alpha) \times \text{Cosine\_Similarity}$$
+       where $\alpha$ is a tuning parameter controlling the trade-off between semantic inference and lexical/dense similarity.
+
+## Main Dataset
+
+- **Hugging Face Dataset**: `sentence-transformers/all-nli`
+- **Recommended Subsets**:
+  - `pair-class`: Contains `premise`, `hypothesis`, and `label` columns. Used for EDA, NLI classification, and Cross-Encoder training.
+  - `pair-score`: Contains `sentence1`, `sentence2`, and `score` columns. Used for similarity scoring and regression experiments.
+  - `pair`: Contains `anchor` and `positive` columns. Used for bi-encoder training with positive pairs.
+  - `triplet`: Contains `anchor`, `positive`, and `negative` columns. Used for triplet loss training with hard negatives.
+- **Label Mapping**:
+  - `0 (entailment)` -> Semantic positive (Similarity score: 1.0)
+  - `1 (neutral)` -> Undetermined relation (Similarity score: 0.5)
+  - `2 (contradiction)` -> Semantic conflict (Similarity score: 0.0)
+
+## Repository Structure
 
 ```text
 similarity_search/
   configs/
+    allnli_70_15_15.json
     allnli_data.json
   data/
     raw/
     processed/
-  docs/
-    ALLNLI_DATASET.md
-    TEAM_WORKFLOW.md
+  models/
+    allnli-cross-encoder-nli/
+    allnli-minilm-biencoder/
+    sftbe_checkpoint/
+    tfidf_baseline/
   notebooks/
+    01_train_tfidf_clean_full_eval5k_kaggle.ipynb
+    02_train_minilm_clean_full_earlystop_eval5k_kaggle.ipynb
+    03_train_cross_encoder_clean_full_earlystop_eval5k_kaggle.ipynb
+    04_train_sftbe_clean_full_earlystop_eval5k_kaggle.ipynb
+    05_evaluate_hybrid_models_kaggle.ipynb
     README.md
   outputs/
     figures/
     reports/
     tables/
+  scripts/
+    build_final_model_summary.py
+    build_training_process_artifacts.py
+    compare_baselines.py
+    create_hybrid_notebook.py
+    evaluate_sftbe_cross_encoder.py
+    push_processed_dataset_to_hub.py
   src/
     similarity_search/
+      app/
+        streamlit_app.py
       data/
         eda_allnli.py
         prepare_allnli.py
+        prepare_allnli_70_15_15_clean.py
         text_utils.py
-      app/
       evaluation/
       models/
+        minilm_baseline.py
+        sftbe_evaluation.py
+        tfidf_baseline.py
+        tfidf_preprocessing_ablation.py
+        train_biencoder.py
+        train_cross_encoder.py
+        train_minilm.py
+        train_sftbe.py
+        train_tfidf.py
       sftbe/
-        prepare_data.py
-        train.py
         evaluate.py
         model/
-  models/
-    sftbe_checkpoint/
-      stage0_final.pt
-  requirements.txt
+        prepare_data.py
+        train.py
+  docker-compose.yml
+  Dockerfile
   pyproject.toml
+  README.md
+  requirements-app.txt
+  requirements-kaggle.txt
+  requirements-train.txt
+  requirements.txt
 ```
 
-## Setup
+## Environment Setup
+
+1. Create and activate a virtual environment:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+```
+
+2. Upgrade pip and install general dependencies:
+
+```powershell
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python -m pip install -e .
 ```
 
-`pyproject.toml` requires Python >=3.10. If your interpreter is older (e.g.
-Python 3.9), `pip install -e .` fails with a version error. In that case skip
-the editable install and set `PYTHONPATH` instead before running any
-`python -m similarity_search...` command or the Streamlit app:
+`pyproject.toml` requires Python >= 3.10. If your interpreter is older (e.g., Python 3.9), skip the editable install and set `PYTHONPATH` before executing any module or application:
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -74,19 +132,19 @@ $env:PYTHONPATH = "src"
 export PYTHONPATH=src
 ```
 
-For later model training:
+3. For model training dependencies:
 
 ```powershell
 python -m pip install -r requirements-train.txt
 ```
 
-For the web demo:
+4. For web application dependencies:
 
 ```powershell
 python -m pip install -r requirements-app.txt
 ```
 
-## Prepare AllNLI data
+## Data Preparation and EDA
 
 Quick local test with a small sample:
 
@@ -94,254 +152,154 @@ Quick local test with a small sample:
 python -m similarity_search.data.prepare_allnli --subsets pair-class --max-rows-per-split 5000
 ```
 
-Prepare the recommended data subsets:
+Prepare all recommended subsets:
 
 ```powershell
 python -m similarity_search.data.prepare_allnli --subsets pair-class pair-score triplet
 ```
 
-Outputs are written to:
-
-```text
-data/processed/allnli/
-```
-
-## Run EDA
-
-```powershell
-python -m similarity_search.data.eda_allnli --subset pair-class
-```
-
-Outputs are written to:
-
-```text
-outputs/tables/allnli/pair-class/
-outputs/figures/allnli/pair-class/
-outputs/reports/allnli/pair-class/
-```
-
-## Clean-full AllNLI training
-
-The current comparable benchmark uses the full AllNLI `pair-class` data,
-shared preprocessing, one clean 70/15/15 split, early stopping for neural
-models, and a fixed 5k test performance report.
-
-Prepare the clean split locally:
+Prepare the standardized clean 70/15/15 split used for benchmark evaluation:
 
 ```powershell
 python -m similarity_search.data.prepare_allnli_70_15_15_clean
 ```
 
-Train/evaluate individual models:
+Run exploratory data analysis (EDA):
 
 ```powershell
-python -m similarity_search.models.train_tfidf
-python -m similarity_search.models.train_minilm
-python -m similarity_search.models.train_cross_encoder
-python -m similarity_search.models.train_sftbe --checkpoint-path models/sftbe_checkpoint/stage0_final.pt
+python -m similarity_search.data.eda_allnli --subset pair-class
 ```
 
-Kaggle-ready independent notebooks live in `notebooks/`:
+Outputs, figures, and summary reports are generated in `outputs/tables/`, `outputs/figures/`, and `outputs/reports/`.
 
-```text
-01_train_tfidf_clean_full_eval5k_kaggle.ipynb
-02_train_minilm_clean_full_earlystop_eval5k_kaggle.ipynb
-03_train_cross_encoder_clean_full_earlystop_eval5k_kaggle.ipynb
-04_train_sftbe_clean_full_earlystop_eval5k_kaggle.ipynb
-```
+## Models and Training Pipeline
 
-See `docs/CLEAN_FULL_ALLNLI_PIPELINE.md` for the full workflow.
+The repository provides modular training and evaluation scripts across five core modeling approaches:
 
-## Run the TF-IDF baseline
+1. **TF-IDF Baseline**: Fits a lexical vectorizer and selects an entailment similarity threshold on the development split:
+   ```powershell
+   python -m similarity_search.models.train_tfidf
+   python -m similarity_search.models.tfidf_baseline
+   ```
 
-Fit TF-IDF on the training split, select the entailment similarity threshold
-on the development split, and report pair and retrieval metrics on the test
-split:
+2. **Pretrained MiniLM Baseline**: Evaluates `sentence-transformers/all-MiniLM-L6-v2` without additional fine-tuning:
+   ```powershell
+   python -m similarity_search.models.minilm_baseline --device cpu
+   ```
+
+3. **Fine-Tuned MiniLM Bi-Encoder**: Fine-tunes the MiniLM architecture on AllNLI positive pairs and triplets:
+   ```powershell
+   python -m similarity_search.models.train_minilm
+   ```
+   For Kaggle or GPU cluster training using `MultipleNegativesRankingLoss`:
+   ```bash
+   python -m similarity_search.models.train_biencoder --output-dir models/allnli-minilm-biencoder --num-train-epochs 1 --batch-size 64
+   ```
+
+4. **Cross-Encoder NLI Reranker**: Fine-tunes `distilbert-base-uncased` for pairwise classification across the three NLI classes:
+   ```powershell
+   python -m similarity_search.models.train_cross_encoder
+   ```
+
+5. **Custom SFT-BE Checkpoint**: Fine-tunes and evaluates the custom supervised fine-tuned bi-encoder (expected at `models/sftbe_checkpoint/stage0_final.pt`):
+   ```powershell
+   python -m similarity_search.models.train_sftbe --checkpoint-path models/sftbe_checkpoint/stage0_final.pt
+   python -m similarity_search.sftbe.prepare_data
+   python -m similarity_search.sftbe.train
+   python -m similarity_search.models.sftbe_evaluation
+   ```
+
+### Evaluation and Reporting Scripts
+
+- Compare lexical and dense baselines:
+  ```powershell
+  python scripts/compare_baselines.py
+  ```
+- Run preprocessing ablation study for TF-IDF:
+  ```powershell
+  python -m similarity_search.models.tfidf_preprocessing_ablation
+  ```
+- Evaluate SFT-BE and Cross-Encoder models:
+  ```powershell
+  python scripts/evaluate_sftbe_cross_encoder.py
+  ```
+- Generate final model summary comparison tables:
+  ```powershell
+  python scripts/build_final_model_summary.py
+  ```
+- Build training loss figures and process summary tables:
+  ```powershell
+  python scripts/build_training_process_artifacts.py
+  ```
+
+## Kaggle Notebooks
+
+For reproducible experimentation and benchmark evaluations on GPU accelerators, five standalone notebooks are located in `notebooks/`:
+
+- `01_train_tfidf_clean_full_eval5k_kaggle.ipynb`
+- `02_train_minilm_clean_full_earlystop_eval5k_kaggle.ipynb`
+- `03_train_cross_encoder_clean_full_earlystop_eval5k_kaggle.ipynb`
+- `04_train_sftbe_clean_full_earlystop_eval5k_kaggle.ipynb`
+- `05_evaluate_hybrid_models_kaggle.ipynb`
+
+Each notebook automates environment setup, dataset loading or generation, model training with early stopping, evaluation on a fixed 5k test sample, and latency/throughput runtime benchmarking. See `notebooks/README.md` for detailed instructions on Kaggle execution and model checkpoint uploading.
+
+## Web Application Demo (Streamlit)
+
+An interactive web demo is provided to showcase real-time semantic retrieval and document comparison.
+
+### Features
+- **Semantic Search**: Upload a document (`.txt`, `.pdf`, `.docx`) and enter a natural language query to retrieve semantic matches with similarity scores and page numbers.
+- **Document Comparison**: Upload two documents to compute sentence-level semantic matching and estimate overall document similarity percentage.
+- **Model Selection**: Switch dynamically between TF-IDF, Pretrained MiniLM, Fine-tuned MiniLM, SFT-BE, Cross-Encoder NLI, and Hybrid Reranking pipelines.
+
+### Running Locally
 
 ```powershell
-python -m similarity_search.models.tfidf_baseline
+python -m pip install -r requirements-app.txt
+streamlit run src/similarity_search/app/streamlit_app.py
 ```
 
-Outputs are written to:
-
-```text
-outputs/tfidf_baseline/metrics.json
-outputs/tfidf_baseline/dev_predictions.csv
-outputs/tfidf_baseline/test_predictions.csv
-models/tfidf_baseline/vectorizer.joblib
-```
-
-## Run the pretrained MiniLM baseline
-
-Evaluate `sentence-transformers/all-MiniLM-L6-v2` without fine-tuning:
-
-```powershell
-python -m pip install -r requirements-train.txt
-python -m similarity_search.models.minilm_baseline --device cpu
-python scripts/compare_baselines.py
-```
-
-The MiniLM metrics and the shared comparison table are written to:
-
-```text
-outputs/minilm_baseline/metrics.json
-outputs/tables/model_comparison.csv
-```
-
-## Run the custom SFT-BE checkpoint
-
-The former root-level `src/` model code has been merged into the installable
-package as `similarity_search.sftbe`. The Stage 0 checkpoint is a trained model
-artifact and is expected locally at:
-
-```text
-models/sftbe_checkpoint/stage0_final.pt
-```
-
-Evaluate the checkpoint on STS-B:
-
-```powershell
-python -m similarity_search.sftbe.evaluate
-```
-
-Prepare the distillation cache and continue training:
-
-```powershell
-python -m similarity_search.sftbe.prepare_data
-python -m similarity_search.sftbe.train
-```
-
-The Streamlit demo includes `SFT-BE checkpoint` as a model option for semantic
-search and document comparison. The `models/` directory is ignored by Git, so
-large checkpoints should be shared through Google Drive, Hugging Face Hub, or
-another artifact store instead of GitHub.
-
-Evaluate SFT-BE on the same AllNLI pair-class protocol used by TF-IDF and
-MiniLM:
-
-```powershell
-$env:PYTHONPATH="src"
-python -m similarity_search.models.sftbe_evaluation
-```
-
-Create the TF-IDF preprocessing ablation table:
-
-```powershell
-$env:PYTHONPATH="src"
-python -m similarity_search.models.tfidf_preprocessing_ablation
-```
-
-Build the final report summary table:
-
-```powershell
-python scripts/build_final_model_summary.py
-```
-
-Build training-process figures and summary tables from existing logs:
-
-```powershell
-python scripts/build_training_process_artifacts.py
-```
-
-Outputs:
-
-```text
-outputs/sftbe_checkpoint/metrics.json
-outputs/tables/tfidf_preprocessing_ablation.csv
-outputs/tables/final_model_summary.csv
-outputs/tables/training_process_summary.csv
-outputs/figures/training/
-```
-
-## Fine-tune MiniLM on Kaggle
-
-The repository includes a Kaggle-ready training CLI using AllNLI `pair` and
-`MultipleNegativesRankingLoss`:
-
-```bash
-python -m similarity_search.models.train_biencoder \
-  --output-dir /kaggle/working/allnli-minilm-biencoder \
-  --num-train-epochs 1 \
-  --batch-size 64
-```
-
-See `docs/KAGGLE_BIENCODER_TRAINING.md` for the full notebook workflow,
-evaluation commands, model download, and optional Hugging Face upload.
-
-## Collaboration recommendation
-
-Use GitHub for source code, notebooks, report source, issues, and pull requests.
-Use Hugging Face Hub for trained models. Use Google Drive only for large files
-that should not be committed, such as raw exports, demo videos, slides, and
-temporary checkpoints.
-
-## Docker
-
-Build the shared data/EDA environment:
-
-```powershell
-docker compose build dev
-```
-
-Run data preparation inside Docker:
-
-```powershell
-docker compose run --rm dev python -m similarity_search.data.prepare_allnli --subsets pair-class --max-rows-per-split 5000
-```
-
-Run EDA inside Docker:
-
-```powershell
-docker compose run --rm dev python -m similarity_search.data.eda_allnli --subset pair-class
-```
-
-Run the web skeleton:
-
-```powershell
-docker compose up web
-```
-
-Then open:
-
+Open your browser at:
 ```text
 http://localhost:8501
 ```
 
-For the full setup and GitHub workflow, see:
-
-```text
-docs/DOCKER_AND_GITHUB_WORKFLOW.md
-```
-
-The web demo now includes semantic search, document comparison, Cross-Encoder
-NLI scoring, and Hybrid reranking. See:
-
-```text
-docs/WEB_DEMO.md
-```
-
-## Share processed dataset with the team
-
-Do not commit processed datasets to GitHub. Publish processed subsets to
-Hugging Face Dataset Hub, then every team member can load the same data with
-`datasets.load_dataset()`.
-
-Example:
+### Running with Docker
 
 ```powershell
-python scripts/push_processed_dataset_to_hub.py --subset pair-class --repo-id <team-name>/allnli-pair-class-processed --private
+docker compose build web
+docker compose up web
 ```
 
-Team members load it with:
+### Required Local Model Folders
+For full functionality in the web demo, ensure the following model checkpoints exist locally:
+- `models/tfidf_baseline/vectorizer.joblib`
+- `models/allnli-minilm-biencoder/final/`
+- `models/allnli-cross-encoder-nli/final/`
+- `models/sftbe_checkpoint/stage0_final.pt`
 
-```python
-from datasets import load_dataset
+## Docker and Team Workflow
 
-ds = load_dataset("<team-name>/allnli-pair-class-processed")
+### Development Container
+Build and run data preparation or EDA tasks within an isolated Docker environment:
+
+```powershell
+docker compose build dev
+docker compose run --rm dev python -m similarity_search.data.prepare_allnli --subsets pair-class --max-rows-per-split 5000
+docker compose run --rm dev python -m similarity_search.data.eda_allnli --subset pair-class
 ```
 
-See:
-
-```text
-docs/DATASET_SHARING_AND_TRAINING.md
-```
+### Team Collaboration and Dataset Sharing
+- **Source Code**: Use GitHub for managing code, configuration files, scripts, notebooks, and issues.
+- **Trained Models**: Publish large checkpoints and final models to Hugging Face Model Hub.
+- **Processed Datasets**: Do not commit large processed dataset files or raw binaries to GitHub. Instead, push processed datasets to Hugging Face Dataset Hub:
+  ```powershell
+  python scripts/push_processed_dataset_to_hub.py --subset pair-class --repo-id <team-name>/allnli-pair-class-processed --private
+  ```
+  Team members can then load the dataset directly in code:
+  ```python
+  from datasets import load_dataset
+  ds = load_dataset("<team-name>/allnli-pair-class-processed")
+  ```
+- **Large Artifacts**: Use external storage (such as Google Drive) for videos, slide presentations, and temporary raw exports.
